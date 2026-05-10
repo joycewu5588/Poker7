@@ -1,0 +1,1537 @@
+<!DOCTYPE html>
+
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="官邸帳務">
+<title>🎴 官邸聚會帳務</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎴</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: #0a0c10; font-family: 'Noto Serif TC', serif; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #c9a84c; font-family: 'IBM Plex Mono', monospace; font-size: 14px; flex-direction: column; gap: 12px; }
+  .spin { width: 32px; height: 32px; border: 3px solid #2a3050; border-top-color: #c9a84c; border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="loading"><div class="spin"></div><div>載入中...</div></div>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect, useCallback, createContext, useContext, useRef } = React;
+
+// ─── Firebase 設定（透過 CDN 動態載入）───
+const firebaseConfig = {
+  apiKey: "AIzaSyAgogDWt3fxdISoeWjbVaRUAMde9whFCjM",
+  authDomain: "poker7.firebaseapp.com",
+  projectId: "poker7",
+  storageBucket: "poker7.firebasestorage.app",
+  messagingSenderId: "896751178437",
+  appId: "1:896751178437:web:2dc693f684886498a2d6ac",
+};
+
+const BACKUP_COL = "pokerclub_backups";
+
+// 動態載入 Firebase（透過 script tag 注入到頁面）
+let _fbReady = null;
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) { existing.addEventListener("load", resolve); return; }
+    const s = document.createElement("script");
+    s.src = src;
+    s.type = "module";
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("Failed to load: " + src));
+    document.head.appendChild(s);
+  });
+}
+
+function getFirebase() {
+  if (!_fbReady) {
+    _fbReady = (async () => {
+      // 用 module 形式從 CDN 動態 import，繞過 artifact 的 import 限制
+      // 將 Firebase 模組附加到 window 上以便存取
+      const code = `
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-app.js";
+        import {
+          getFirestore, doc, getDoc, setDoc, onSnapshot,
+          collection, getDocs, deleteDoc, query, orderBy, limit
+        } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-firestore.js";
+        const cfg = ${JSON.stringify(firebaseConfig)};
+        const app = initializeApp(cfg);
+        const db = getFirestore(app);
+        window.__firebase = { db, doc, getDoc, setDoc, onSnapshot, collection, getDocs, deleteDoc, query, orderBy, limit };
+        window.dispatchEvent(new Event("__firebase_ready"));
+      `;
+      const blob = new Blob([code], { type: "application/javascript" });
+      const url = URL.createObjectURL(blob);
+      const script = document.createElement("script");
+      script.type = "module";
+      script.src = url;
+
+      const ready = new Promise((resolve, reject) => {
+        const onReady = () => { window.removeEventListener("__firebase_ready", onReady); resolve(); };
+        window.addEventListener("__firebase_ready", onReady);
+        script.onerror = () => reject(new Error("Firebase script failed to load"));
+        setTimeout(() => reject(new Error("Firebase load timeout (10s)")), 10000);
+      });
+
+      document.head.appendChild(script);
+      await ready;
+      URL.revokeObjectURL(url);
+      return window.__firebase;
+    })();
+  }
+  return _fbReady;
+}
+
+// ─── Global dialog system (replaces window.confirm/alert which are blocked in artifacts) ───
+const DialogContext = createContext({ confirm: () => Promise.resolve(true), alert: () => Promise.resolve() });
+const useDialog = () => useContext(DialogContext);
+
+function DialogProvider({ children }) {
+  const [dialog, setDialog] = useState(null);
+
+  const confirm = (message) => new Promise((resolve) => {
+    setDialog({ type: "confirm", message, resolve });
+  });
+
+  const alert = (message) => new Promise((resolve) => {
+    setDialog({ type: "alert", message, resolve });
+  });
+
+  const handleClose = (result) => {
+    if (dialog) dialog.resolve(result);
+    setDialog(null);
+  };
+
+  return (
+    <DialogContext.Provider value={{ confirm, alert }}>
+      {children}
+      {dialog && (
+        <div onClick={(e) => e.target === e.currentTarget && handleClose(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 500,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#12151e", border: "1px solid #c9a84c", borderRadius: 8,
+            padding: 22, width: "100%", maxWidth: 380 }}>
+            <div style={{ color: "#e8e4d8", fontSize: 14, marginBottom: 18, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
+              {dialog.message}
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              {dialog.type === "confirm" && (
+                <button onClick={() => handleClose(false)}
+                  style={{ background: "transparent", color: "#6a6e88", border: "1px solid #252d45",
+                    padding: "7px 16px", borderRadius: 4, cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>
+                  取消
+                </button>
+              )}
+              <button onClick={() => handleClose(true)}
+                style={{ background: "#c9a84c", color: "#0a0c10", border: "none",
+                  padding: "7px 16px", borderRadius: 4, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit" }}>
+                確定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </DialogContext.Provider>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// CONSTANTS & DEFAULTS
+// ═══════════════════════════════════════════════════════
+const STORAGE_KEY = "pokerclub_v9";
+
+// 用戶資料（內建為預設值）
+const USER_DEFAULT_DATA = {"sessions": [{"id": "s1778394274498", "date": "2026-04-24", "hours": 5.5, "totalWater": 48900, "venueFee": 20000, "dealerWage": 4400, "mealFee": 0, "jackpot": 0, "note": "", "reserveOverride": 24500, "players": [{"name": "小雨", "amount": 10300, "type": "dealer"}, {"name": "尚紘", "amount": 55000, "type": "member"}, {"name": "Barbie", "amount": 23000, "type": "member"}, {"name": "恰吉", "amount": 9600, "type": "member"}, {"name": "Derek", "amount": 4000, "type": "member"}, {"name": "龍也", "amount": 36000, "type": "member"}, {"name": "Joyce", "amount": 9000, "type": "member"}, {"name": "Vicky", "amount": -12900, "type": "guest"}, {"name": "華導", "amount": -105000, "type": "member"}, {"name": "院長", "amount": -29400, "type": "member"}, {"name": "Gary", "amount": -45000, "type": "member"}, {"name": "Shaan", "amount": -3500, "type": "member"}], "bonusEvents": []}, {"id": "s1778394494508", "date": "2026-05-01", "hours": 8, "totalWater": 72000, "venueFee": 20000, "dealerWage": 6400, "mealFee": 0, "jackpot": 0, "note": "", "reserveOverride": 45600, "players": [{"name": "小雨", "amount": 17000, "type": "dealer"}, {"name": "華導", "amount": 12500, "type": "member"}, {"name": "Shaan", "amount": 18500, "type": "member"}, {"name": "龍也", "amount": 5000, "type": "member"}, {"name": "依稀", "amount": 21000, "type": "member"}, {"name": "Barbie", "amount": 7000, "type": "member"}, {"name": "恰吉", "amount": 10000, "type": "member"}, {"name": "尚紘", "amount": 19000, "type": "member"}, {"name": "院長", "amount": -51000, "type": "member"}, {"name": "Joyce", "amount": -25000, "type": "member"}, {"name": "Derek", "amount": -68000, "type": "member"}, {"name": "Gary", "amount": -38000, "type": "member"}], "bonusEvents": []}, {"id": "s1778394789177", "date": "2026-05-06", "hours": 8, "totalWater": 47900, "venueFee": 18000, "dealerWage": 6400, "mealFee": 4000, "jackpot": 6000, "note": "", "reserveOverride": 23500, "players": [{"name": "小雨", "amount": 15100, "type": "dealer"}, {"name": "華導", "amount": 40000, "type": "member"}, {"name": "尚紘", "amount": 27000, "type": "member"}, {"name": "Shaan", "amount": 21000, "type": "member"}, {"name": "川哥", "amount": 19000, "type": "guest"}, {"name": "Barbie", "amount": 13000, "type": "member"}, {"name": "David", "amount": 13000, "type": "guest"}, {"name": "Derek", "amount": 13000, "type": "member"}, {"name": "龍也", "amount": -27000, "type": "member"}, {"name": "依稀", "amount": -32000, "type": "member"}, {"name": "班", "amount": -34700, "type": "guest"}, {"name": "李子榕", "amount": -44000, "type": "guest"}, {"name": "院長", "amount": -71300, "type": "member"}], "bonusEvents": [{"type": "monster", "winner": "班", "amount": 3000}, {"type": "highhand", "winner": "班", "amount": 3000}]}, {"id": "s1778394021887", "date": "2026-05-08", "hours": 6.5, "totalWater": 21000, "venueFee": 16000, "dealerWage": 5200, "mealFee": 5100, "jackpot": 6000, "note": "Splashd pot 5500", "reserveOverride": -200, "players": [{"name": "小雨", "amount": 13000, "type": "dealer"}, {"name": "尚紘", "amount": 32000, "type": "member"}, {"name": "Gary", "amount": 30000, "type": "member"}, {"name": "華導", "amount": 23000, "type": "member"}, {"name": "龍也", "amount": 11000, "type": "member"}, {"name": "Derek", "amount": 23000, "type": "member"}, {"name": "Shaan", "amount": 21000, "type": "member"}, {"name": "恰吉", "amount": 8000, "type": "member"}, {"name": "院長", "amount": 2000, "type": "member"}, {"name": "Barbie", "amount": -151000, "type": "member"}, {"name": "Joyce", "amount": -11000, "type": "member"}, {"name": "依稀", "amount": -1000, "type": "member"}, {"name": "鮪魚", "amount": -16000, "type": "guest"}, {"name": "Vicky", "amount": -5000, "type": "guest"}], "bonusEvents": [{"type": "monster", "winner": "Gary", "amount": 3000}, {"type": "highhand", "winner": "Gary", "amount": 3000}]}], "members": [{"id": "尚紘", "name": "尚紘", "aliases": ["尚紘"], "bank": "009-97385159607103", "type": "member"}, {"id": "Gary", "name": "Gary", "aliases": ["Gary"], "bank": "013-049500138610", "type": "member"}, {"id": "Derek", "name": "Derek", "aliases": ["Derek"], "bank": "822-901562092927", "type": "member"}, {"id": "Shaan", "name": "Shaan", "aliases": ["Shaan"], "bank": "808-1078979050426", "type": "member"}, {"id": "華導", "name": "華導", "aliases": ["華導"], "bank": "822-152540191770", "type": "member"}, {"id": "龍也", "name": "龍也", "aliases": ["龍也"], "bank": "808-026979240556", "type": "member"}, {"id": "恰吉", "name": "恰吉", "aliases": ["恰吉"], "bank": "013-218506133471", "type": "member"}, {"id": "院長", "name": "院長", "aliases": ["院長"], "bank": "822-0602540270507", "type": "member"}, {"id": "Barbie", "name": "Barbie", "aliases": ["Barbie", "barbie"], "bank": "822-141540328460", "type": "member"}, {"id": "Joyce", "name": "Joyce", "aliases": ["Joyce"], "bank": "822-071515377752", "type": "member"}, {"id": "依稀", "name": "依稀", "aliases": ["依稀"], "bank": "012-81680000770388", "type": "member"}, {"id": "小雨", "name": "小雨", "aliases": ["小雨"], "bank": "012-442168112699", "type": "dealer"}, {"id": "場地", "name": "場地", "aliases": ["場地"], "bank": "808-0819979102368", "type": "venue"}, {"id": "Vicky", "name": "Vicky", "aliases": ["Vicky", "vicky"], "bank": "", "type": "guest"}, {"id": "李子榕", "name": "李子榕", "aliases": ["李子榕"], "bank": "", "type": "guest"}, {"id": "川哥", "name": "川哥", "aliases": ["川哥"], "bank": "", "type": "guest"}, {"id": "班", "name": "班", "aliases": ["班"], "bank": "", "type": "guest"}, {"id": "David", "name": "David", "aliases": ["David", "david"], "bank": "", "type": "guest"}, {"id": "芭比", "name": "芭比", "aliases": ["芭比"], "bank": "", "type": "dealer"}, {"id": "鮪魚", "name": "鮪魚", "aliases": ["鮪魚"], "bank": "", "type": "guest"}], "expenses": [{"id": "e1778394841333", "date": "2026-05-01", "amount": 13900, "desc": "餐費"}]};
+
+const DEFAULT_MEMBERS = [
+  { id:"尚紘",  name:"尚紘",  aliases:["尚紘"],                               bank:"009-97385159607103", type:"member" },
+  { id:"Gary",  name:"Gary",  aliases:["Gary"],                                bank:"013-049500138610",   type:"member" },
+  { id:"Derek", name:"Derek", aliases:["Derek"],                               bank:"822-901562092927",   type:"member" },
+  { id:"Shaan", name:"Shaan", aliases:["Shaan"],                               bank:"808-1078979050426",  type:"member" },
+  { id:"華導",  name:"華導",  aliases:["華導"],                               bank:"822-152540191770",   type:"member" },
+  { id:"龍也",  name:"龍也",  aliases:["龍也"],                               bank:"808-026979240556",   type:"member" },
+  { id:"恰吉",  name:"恰吉",  aliases:["恰吉"],                               bank:"013-218506133471",   type:"member" },
+  { id:"院長",  name:"院長",  aliases:["院長"],                               bank:"822-0602540270507",  type:"member" },
+  { id:"Barbie",name:"Barbie",aliases:["Barbie","芭比","barbie"],             bank:"822-141540328460",   type:"member" },
+  { id:"Joyce", name:"Joyce", aliases:["Joyce"],                               bank:"822-071515377752",   type:"member" },
+  { id:"依稀",  name:"依稀",  aliases:["依稀","EC","Eric","eric","鮪魚"],     bank:"012-81680000770388",  type:"member" },
+  { id:"小雨",  name:"小雨",  aliases:["小雨","雨","Dealer 小費","Dealer 獎金","Dealer小費","Dealer獎金"], bank:"012-442168112699", type:"dealer" },
+  { id:"場地",  name:"場地",  aliases:["場地"],                               bank:"808-0819979102368",   type:"venue"  },
+  { id:"Vicky", name:"Vicky", aliases:["Vicky","vicky"],                       bank:"",                   type:"guest"  },
+  { id:"李子榕",name:"李子榕",aliases:["李子榕"],                             bank:"",                   type:"guest"  },
+  { id:"川哥",  name:"川哥",  aliases:["川哥"],                               bank:"",                   type:"guest"  },
+  { id:"班",    name:"班",    aliases:["班"],                                  bank:"",                   type:"guest"  },
+  { id:"David", name:"David", aliases:["David","david"],                       bank:"",                   type:"guest"  },
+];
+
+const DEFAULT_SESSIONS = [
+  { id:"s1", date:"2025-04-24", hours:5.5, totalWater:48900, venueFee:20000, dealerWage:4400, mealFee:0, jackpot:0, note:"", reserveOverride:24500,
+    bonusEvents:[],
+    players:[
+      {name:"Dealer 小費",amount:10300,type:"dealer"},
+      {name:"芭比",amount:23000,type:"member"},{name:"尚紘",amount:55000,type:"member"},
+      {name:"恰吉",amount:9600,type:"member"},{name:"Derek",amount:4000,type:"member"},
+      {name:"龍也",amount:36000,type:"member"},{name:"Joyce",amount:9000,type:"member"},
+      {name:"Vicky",amount:-12900,type:"guest"},{name:"華導",amount:-105000,type:"member"},
+      {name:"院長",amount:-29400,type:"member"},{name:"Shaan",amount:-3500,type:"member"},
+      {name:"Gary",amount:-45000,type:"member"},
+    ]},
+  { id:"s2", date:"2025-05-01", hours:8, totalWater:72000, venueFee:20000, dealerWage:6400, mealFee:13900, jackpot:0, note:"餐費13900", reserveOverride:31700,
+    bonusEvents:[],
+    players:[
+      {name:"Dealer 獎金",amount:17000,type:"dealer"},
+      {name:"華導",amount:12500,type:"member"},{name:"Shaan",amount:18500,type:"member"},
+      {name:"龍也",amount:5000,type:"member"},{name:"依稀",amount:21000,type:"member"},
+      {name:"芭比",amount:7000,type:"member"},{name:"恰吉",amount:10000,type:"member"},
+      {name:"尚紘",amount:19000,type:"member"},{name:"院長",amount:-51000,type:"member"},
+      {name:"Joyce",amount:-25000,type:"member"},{name:"Derek",amount:-68000,type:"member"},
+      {name:"Gary",amount:-38000,type:"member"},
+    ]},
+  { id:"s3", date:"2025-05-06", hours:8, totalWater:57900, venueFee:18000, dealerWage:6400, mealFee:4000, jackpot:6000, note:"餐費4000、Jackpot 6000", reserveOverride:23500,
+    bonusEvents:[
+      {type:"monster",winner:"班",amount:3000},
+      {type:"highhand",winner:"班",amount:3000},
+    ],
+    players:[
+      {name:"Dealer 小費",amount:15100,type:"dealer"},
+      {name:"華導",amount:40000,type:"member"},{name:"尚紘",amount:27000,type:"member"},
+      {name:"Shaan",amount:20000,type:"member"},{name:"川哥",amount:19000,type:"guest"},
+      {name:"Barbie",amount:13000,type:"member"},{name:"Derek",amount:13000,type:"member"},
+      {name:"David",amount:13000,type:"guest"},{name:"龍也",amount:-30000,type:"member"},
+      {name:"依稀",amount:-32000,type:"member"},{name:"班",amount:-40700,type:"guest"},
+      {name:"李子榕",amount:-44000,type:"guest"},{name:"院長",amount:-71300,type:"member"},
+    ]},
+];
+
+const DEFAULT_DATA = { sessions: DEFAULT_SESSIONS, members: DEFAULT_MEMBERS, expenses: [] };
+
+// ═══════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════
+const fmt    = n => (n >= 0 ? "+" : "-") + Math.abs(n).toLocaleString();
+const fmtAbs = n => Math.abs(n).toLocaleString();
+const calcReserve = s => s.reserveOverride !== undefined ? s.reserveOverride : s.totalWater - s.venueFee - s.dealerWage;
+
+function resolveId(name, members) {
+  const n = (name || "").trim().toLowerCase();
+  for (const m of members) if (m.aliases.some(a => a.toLowerCase() === n)) return m.id;
+  return name;
+}
+const getMember  = (n, members) => members.find(m => m.id === resolveId(n, members)) || null;
+const dispName   = (n, members) => { const m = getMember(n, members); return m ? m.name : n; };
+const bankOf     = (n, members) => { const m = getMember(n, members); return m ? (m.bank || "") : ""; };
+
+// Greedy minimum-transfers settlement
+function buildSettle(s, members, pairs) {
+  const res = calcReserve(s);
+  const dealerTips = s.players.filter(p => p.type === "dealer").reduce((a, p) => a + p.amount, 0);
+  const dealerTotal = s.dealerWage + dealerTips;
+  const regular = s.players.filter(p => p.type !== "dealer");
+
+  // Apply pairing: merge paired players
+  const merged = {};
+  for (const p of regular) {
+    const pid = resolveId(p.name, members);
+    // find if this player is in a pair
+    let groupId = pid;
+    let groupName = dispName(p.name, members);
+    let groupBank = bankOf(pid, members);
+    for (const pair of pairs) {
+      if (pair.includes(pid)) {
+        groupId = pair[0]; // canonical id = first in pair
+        groupName = pair.map(id => { const m = members.find(x => x.id === id); return m ? m.name : id; }).join("+");
+        groupBank = bankOf(pair[0], members); // use first person's bank
+        break;
+      }
+    }
+    if (!merged[groupId]) merged[groupId] = { label: groupName, id: groupId, bank: groupBank, amount: 0 };
+    merged[groupId].amount += p.amount;
+  }
+
+  const groups = Object.values(merged);
+  const winners = groups.filter(g => g.amount > 0).sort((a, b) => b.amount - a.amount);
+  const losers  = groups.filter(g => g.amount < 0).sort((a, b) => a.amount - b.amount);
+
+  const pool = [];
+  winners.forEach(g => pool.push({ label: g.label, id: g.id, bank: bankOf(g.id, members), amount: g.amount, splittable: false }));
+  if (dealerTotal > 0) pool.push({ label: "Dealer", id: "小雨", bank: bankOf("小雨", members), amount: dealerTotal, splittable: false });
+  pool.push({ label: "場地", id: "場地", bank: bankOf("場地", members), amount: s.venueFee, splittable: false });
+  if (res > 0) pool.push({ label: "公積金 (Joyce)", id: "Joyce", bank: bankOf("Joyce", members), amount: res, splittable: true });
+
+  const negPool = losers.map(g => ({ label: g.label, id: g.id, amount: -g.amount }));
+  if (res < 0) negPool.push({ label: "公積金補差", id: "Joyce", amount: -res });
+  negPool.sort((a, b) => b.amount - a.amount);
+
+  // Settlement order: bigger pools first (so losers fill them in one shot),
+  // but Gary goes near the end (so he absorbs leftovers as the "split-friendly" winner),
+  // and splittable items (公積金 Joyce) go last.
+  const isGary = p => p.id === "Gary";
+  const nonSplit = pool.filter(p => !p.splittable);
+  const splittable = pool.filter(p => p.splittable);
+  const nonGarySorted = nonSplit.filter(p => !isGary(p)).sort((a, b) => b.amount - a.amount);
+  const garyItems = nonSplit.filter(isGary);
+  const poolRem = [...nonGarySorted, ...garyItems, ...splittable].map(p => ({ ...p, rem: p.amount }));
+
+  const paymentMap = {};
+  for (const loser of negPool) {
+    let rem = loser.amount; const pays = [];
+
+    // Pass 1: try to find a single non-Gary, non-splittable item that exactly matches the loser amount.
+    // This minimizes transfer count for both sides.
+    if (rem > 0) {
+      const exactItem = poolRem.find(it => !it.splittable && !isGary(it) && it.rem === rem);
+      if (exactItem) {
+        pays.push({ toLabel: exactItem.label, toId: exactItem.id, toBank: exactItem.bank, amount: rem });
+        exactItem.rem = 0; rem = 0;
+      }
+    }
+
+    // Pass 2: greedy fill in pool order (non-Gary winners → Gary → splittable)
+    for (const item of poolRem) {
+      if (rem <= 0) break; if (item.rem <= 0) continue;
+      const take = Math.min(rem, item.rem);
+      pays.push({ toLabel: item.label, toId: item.id, toBank: item.bank, amount: take });
+      item.rem -= take; rem -= take;
+    }
+    paymentMap[loser.id + "||" + loser.label] = { loserLabel: loser.label, loserId: loser.id, total: loser.amount, pays };
+  }
+  return { pool, paymentMap, res, dealerTotal };
+}
+
+// ═══════════════════════════════════════════════════════
+// COLOURS
+// ═══════════════════════════════════════════════════════
+const C = {
+  bg: "#0a0c10", surface: "#12151e", surface2: "#1a1f2e", border: "#252d45",
+  gold: "#c9a84c", goldLight: "#f0d080", red: "#e05555", green: "#4caf7d",
+  blue: "#4a90d9", text: "#e8e4d8", dim: "#6a6e88", muted: "#3a3e54", accent: "#7c6af7",
+};
+const s = (obj) => Object.entries(obj).map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}:${v}`).join(";");
+
+// ═══════════════════════════════════════════════════════
+// STYLED PRIMITIVES
+// ═══════════════════════════════════════════════════════
+const Tag = ({ children, color = C.blue }) => (
+  <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, marginLeft: 4,
+    background: color + "22", color, border: `1px solid ${color}44`, verticalAlign: "middle" }}>
+    {children}
+  </span>
+);
+
+const Btn = ({ children, onClick, variant = "primary", disabled = false, style: extra = {} }) => {
+  const base = { cursor: disabled ? "not-allowed" : "pointer", borderRadius: 4, fontFamily: "inherit", fontSize: 13,
+    padding: "7px 18px", transition: "all .18s", border: "none", opacity: disabled ? 0.5 : 1 };
+  const variants = {
+    primary:   { background: C.gold, color: "#0a0c10", fontWeight: 700 },
+    secondary: { background: "transparent", color: C.dim, border: `1px solid ${C.border}` },
+    ghost:     { background: "transparent", color: C.dim, border: `1px dashed ${C.border}`, padding: "4px 10px", fontSize: 12 },
+    danger:    { background: "transparent", color: C.red, border: `1px solid ${C.red}44` },
+    accent:    { background: C.accent, color: "#fff", fontWeight: 700 },
+    dark:      { background: C.surface2, color: C.dim, border: `1px solid ${C.border}` },
+  };
+  return <button onClick={disabled ? undefined : onClick} disabled={disabled} style={{ ...base, ...variants[variant], ...extra }}>{children}</button>;
+};
+
+const Input = ({ label, ...props }) => (
+  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+    {label && <label style={{ fontSize: 11, color: C.dim, letterSpacing: "0.04em" }}>{label}</label>}
+    <input {...props} style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text,
+      padding: "7px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 13, outline: "none",
+      width: "100%", boxSizing: "border-box", ...(props.style || {}) }} />
+  </div>
+);
+
+const Select = ({ label, children, ...props }) => (
+  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+    {label && <label style={{ fontSize: 11, color: C.dim, letterSpacing: "0.04em" }}>{label}</label>}
+    <select {...props} style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text,
+      padding: "7px 10px", borderRadius: 4, fontFamily: "inherit", fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" }}>
+      {children}
+    </select>
+  </div>
+);
+
+const Modal = ({ open, title, onClose, onSave, children }) => {
+  if (!open) return null;
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 300,
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: C.surface, border: `1px solid ${C.gold}`, borderRadius: 8,
+        padding: 24, width: "100%", maxWidth: 440, maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ color: C.goldLight, fontWeight: 700, fontSize: 15, marginBottom: 16 }}>{title}</div>
+        {children}
+        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+          <Btn variant="secondary" onClick={onClose}>取消</Btn>
+          {onSave && <Btn onClick={onSave}>儲存</Btn>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const Divider = () => <div style={{ height: 1, background: C.border, margin: "8px 0" }} />;
+
+const FR = ({ label, value, valueColor }) => (
+  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}>
+    <span style={{ color: C.dim }}>{label}</span>
+    <span style={{ fontFamily: "monospace", color: valueColor || C.text }}>{value}</span>
+  </div>
+);
+
+// ═══════════════════════════════════════════════════════
+// SECTION HEADER
+// ═══════════════════════════════════════════════════════
+const SectionHeader = ({ children }) => (
+  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+    <span style={{ fontSize: 10, letterSpacing: "0.2em", color: C.dim, textTransform: "uppercase" }}>{children}</span>
+    <div style={{ flex: 1, height: 1, background: C.border }} />
+  </div>
+);
+
+// ═══════════════════════════════════════════════════════
+// TAB: RECORDS
+// ═══════════════════════════════════════════════════════
+function TabRecords({ data, setData, onEdit }) {
+  const dialog = useDialog();
+  const { sessions, members } = data;
+  if (!sessions.length) return <div style={{ textAlign: "center", padding: 60, color: C.muted }}>尚無場次記錄</div>;
+
+  const deleteSession = async (id) => {
+    if (!(await dialog.confirm("確定刪除此場次？"))) return;
+    setData(d => ({ ...d, sessions: d.sessions.filter(s => s.id !== id) }));
+  };
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 14 }}>
+      {[...sessions].reverse().map(s => {
+        const res = calcReserve(s);
+        const dealer = s.players.find(p => p.type === "dealer");
+        const regular = s.players.filter(p => p.type !== "dealer");
+        // Check balance to mark in-progress
+        const tipNum = dealer ? dealer.amount : 0;
+        const playerSum = regular.reduce((a, p) => a + p.amount, 0);
+        const balance = s.totalWater + tipNum + playerSum;
+        const inProgress = balance !== 0;
+        return (
+          <div key={s.id} style={{ background: C.surface, border: `1px solid ${inProgress ? C.red+"66" : C.border}`, borderRadius: 8, overflow: "hidden" }}>
+            <div style={{ background: C.surface2, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${C.border}` }}>
+              <span style={{ fontFamily: "monospace", color: C.goldLight, fontWeight: 700, fontSize: 14 }}>
+                {s.date}
+                {inProgress && <span style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 3, background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, fontWeight: 600 }}>進行中</span>}
+              </span>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span style={{ fontFamily: "monospace", color: C.dim, fontSize: 11 }}>{s.hours}hr</span>
+                <button onClick={() => onEdit(s.id)} title="編輯"
+                  style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.dim, borderRadius: 3, cursor: "pointer", fontSize: 10, padding: "2px 6px" }}>✎</button>
+                <button onClick={() => deleteSession(s.id)} title="刪除"
+                  style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 3, cursor: "pointer", fontSize: 10, padding: "2px 6px" }}>🗑</button>
+              </div>
+            </div>
+            <div style={{ padding: "12px 14px" }}>
+              <FR label="水錢收入" value={fmtAbs(s.totalWater)} />
+              <FR label="場地費" value={`-${fmtAbs(s.venueFee)}`} valueColor={C.red} />
+              <FR label="Dealer薪" value={`-${fmtAbs(s.dealerWage)}`} valueColor={C.red} />
+              {s.mealFee > 0 && <div style={{ fontSize: 11, marginBottom: 3 }}>
+                <span style={{ background: C.blue+"1a", color: C.blue, border:`1px solid ${C.blue}33`, padding:"1px 6px", borderRadius:3, marginRight:4 }}>餐費 {fmtAbs(s.mealFee)}</span>
+              </div>}
+              {s.jackpot > 0 && <div style={{ fontSize: 11, marginBottom: 3 }}>
+                <span style={{ background: C.gold+"1a", color: C.gold, border:`1px solid ${C.gold}33`, padding:"1px 6px", borderRadius:3 }}>Jackpot {fmtAbs(s.jackpot)}</span>
+              </div>}
+              <Divider />
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
+                <span>水錢餘</span>
+                <span style={{ fontFamily: "monospace", color: res >= 0 ? C.gold : C.red }}>{fmt(res)}</span>
+              </div>
+              {dealer && <FR label={dealer.name} value={fmt(dealer.amount)} valueColor={dealer.amount >= 0 ? C.accent : C.red} />}
+              <Divider />
+              {regular.map((p, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: `1px solid ${C.border}44`, fontSize: 12 }}>
+                  <span>{dispName(p.name, members)}<Tag color={p.type === "member" ? C.blue : C.accent}>{p.type === "member" ? "成員" : "來賓"}</Tag></span>
+                  <span style={{ fontFamily: "monospace", fontWeight: 600, color: p.amount >= 0 ? C.green : C.red }}>{fmt(p.amount)}</span>
+                </div>
+              ))}
+              {(s.bonusEvents || []).length > 0 && <>
+                <Divider />
+                <div style={{ fontSize: 11, color: C.dim, marginBottom: 4 }}>特殊牌</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {s.bonusEvents.map((b, i) => (
+                    <span key={i} style={{ fontSize: 11, padding: "2px 7px", borderRadius: 10, fontFamily: "monospace",
+                      background: b.type === "monster" ? "#e0555522" : C.gold+"22",
+                      color: b.type === "monster" ? "#f87171" : C.goldLight,
+                      border: `1px solid ${b.type === "monster" ? "#e0555544" : C.gold+"44"}` }}>
+                      {b.type === "monster" ? "🐲" : "👑"} {dispName(b.winner, members)} +{fmtAbs(b.amount)}
+                    </span>
+                  ))}
+                </div>
+              </>}
+              {s.note && <div style={{ marginTop: 8, fontSize: 11, color: C.dim }}>📝 {s.note}</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// TAB: NEW SESSION
+// ═══════════════════════════════════════════════════════
+function TabNew({ data, setData, editingId, clearEditing }) {
+  const { members } = data;
+  const EMPTY_FORM = { date: "", hours: "", totalWater: "", venueFee: "", dealerWage: "", mealFee: "", jackpot: "", note: "" };
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [dealerTip, setDealerTip] = useState({ memberId: "", amount: "" });
+  const [players, setPlayers] = useState([{ memberId: "", sign: "win", absAmt: "" }]);
+  const [bonuses, setBonuses] = useState([]);
+  const [saved, setSaved] = useState(false);
+
+  // Load session for editing
+  useEffect(() => {
+    if (!editingId) return;
+    const s = data.sessions.find(x => x.id === editingId);
+    if (!s) return;
+    setForm({
+      date: s.date, hours: String(s.hours), totalWater: String(s.totalWater),
+      venueFee: String(s.venueFee), dealerWage: String(s.dealerWage),
+      mealFee: String(s.mealFee || 0), jackpot: String(s.jackpot || 0),
+      note: s.note || "",
+    });
+    const dealerEntry = s.players.find(p => p.type === "dealer");
+    if (dealerEntry) {
+      const dm = members.find(m => m.aliases.some(a => a.toLowerCase() === dealerEntry.name.toLowerCase()) || m.name === dealerEntry.name);
+      setDealerTip({ memberId: dm ? dm.id : "", amount: String(dealerEntry.amount) });
+    } else {
+      setDealerTip({ memberId: "", amount: "" });
+    }
+    const regular = s.players.filter(p => p.type !== "dealer");
+    if (regular.length) {
+      setPlayers(regular.map(p => {
+        const m = members.find(x => x.aliases.some(a => a.toLowerCase() === p.name.toLowerCase()) || x.name === p.name);
+        return {
+          memberId: m ? m.id : "",
+          sign: p.amount >= 0 ? "win" : "lose",
+          absAmt: String(Math.abs(p.amount)),
+        };
+      }));
+    } else {
+      setPlayers([{ memberId: "", sign: "win", absAmt: "" }]);
+    }
+    setBonuses(s.bonusEvents || []);
+  }, [editingId]);
+
+  const fv = k => parseInt(form[k]) || 0;
+  const reserve = fv("totalWater") - fv("venueFee") - fv("dealerWage");
+  const tipNum = parseInt(dealerTip.amount) || 0;
+  const signedAmt = p => (p.sign === "win" ? 1 : -1) * (parseInt(p.absAmt) || 0);
+  const playerSum = players.reduce((a, p) => a + signedAmt(p), 0);
+  const totalCheck = fv("totalWater") + tipNum + playerSum;
+  const isBalanced = totalCheck === 0;
+
+  const playableMembers = members.filter(m => m.type !== "venue" && m.type !== "dealer");
+  const dealerMembers = members.filter(m => m.type === "dealer");
+
+  const updatePlayer = (i, patch) => setPlayers(ps => { const ns = [...ps]; ns[i] = { ...ns[i], ...patch }; return ns; });
+  const addPlayerRow = () => setPlayers(ps => [...ps, { memberId: "", sign: "win", absAmt: "" }]);
+  const removePlayerRow = i => setPlayers(ps => ps.filter((_, j) => j !== i));
+
+  const clearAll = () => {
+    setForm(EMPTY_FORM);
+    setDealerTip({ memberId: "", amount: "" });
+    setPlayers([{ memberId: "", sign: "win", absAmt: "" }]);
+    setBonuses([]);
+    setSaved(false);
+    if (clearEditing) clearEditing();
+  };
+
+  const dialog = useDialog();
+  const save = async () => {
+    if (!form.date || !form.hours || !form.totalWater) { await dialog.alert("請填入日期、時數、水錢收入"); return; }
+    const dealerMember = members.find(m => m.id === dealerTip.memberId);
+    const dealerEntry = tipNum !== 0 && dealerMember
+      ? [{ name: dealerMember.name, amount: tipNum, type: "dealer" }] : [];
+    const filledPlayers = players.filter(p => p.memberId).map(p => {
+      const m = members.find(x => x.id === p.memberId);
+      return { name: m ? m.name : p.memberId, amount: signedAmt(p), type: m ? m.type : "member" };
+    });
+    const sessionData = {
+      id: editingId || "s" + Date.now(), ...form,
+      hours: parseFloat(form.hours), totalWater: fv("totalWater"),
+      venueFee: fv("venueFee"), dealerWage: fv("dealerWage"),
+      mealFee: fv("mealFee"), jackpot: fv("jackpot"),
+      reserveOverride: reserve,
+      players: [...dealerEntry, ...filledPlayers],
+      bonusEvents: bonuses.filter(b => b.winner),
+    };
+    const newSessions = editingId
+      ? data.sessions.map(s => s.id === editingId ? sessionData : s).sort((a, b) => a.date < b.date ? -1 : 1)
+      : [...data.sessions, sessionData].sort((a, b) => a.date < b.date ? -1 : 1);
+    setData(d => ({ ...d, sessions: newSessions }));
+    clearAll();
+    setSaved(true); setTimeout(() => setSaved(false), 2500);
+  };
+
+  const sel = (extra={}) => ({ background: C.surface2, border: `1px solid ${C.border}`, color: C.text,
+    padding: "6px 8px", borderRadius: 4, fontFamily: "inherit", fontSize: 13, outline: "none", width: "100%", ...extra });
+
+  const filledForBonus = players.filter(p => p.memberId).map(p => {
+    const m = members.find(x => x.id === p.memberId);
+    return m ? m.name : p.memberId;
+  });
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      {saved && (
+        <div style={{ background: C.green+"22", border: `1px solid ${C.green}44`, color: C.green,
+          padding: "8px 14px", borderRadius: 4, marginBottom: 14, fontSize: 13 }}>✅ 場次已儲存！</div>
+      )}
+      {editingId && (
+        <div style={{ background: C.gold+"22", border: `1px solid ${C.gold}66`, color: C.goldLight,
+          padding: "10px 14px", borderRadius: 4, marginBottom: 14, fontSize: 13,
+          display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>✎ 編輯中：{form.date || editingId}</span>
+          <button onClick={clearAll} style={{ background: "transparent", border: `1px solid ${C.gold}66`,
+            color: C.goldLight, padding: "3px 10px", borderRadius: 3, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>取消編輯</button>
+        </div>
+      )}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 20 }}>
+
+        {/* 基本資訊 */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <Input label="📅 日期" type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+          <Input label="⏱ 時數" type="number" step="0.5" placeholder="e.g. 6.5" value={form.hours} onChange={e => setForm(f => ({ ...f, hours: e.target.value }))} />
+          <Input label="💰 水錢收入" type="number" placeholder="e.g. 32100" value={form.totalWater} onChange={e => setForm(f => ({ ...f, totalWater: e.target.value }))} />
+          <Input label="🏠 場地費" type="number" value={form.venueFee} onChange={e => setForm(f => ({ ...f, venueFee: e.target.value }))} />
+          <Input label="👔 Dealer薪資" type="number" value={form.dealerWage} onChange={e => setForm(f => ({ ...f, dealerWage: e.target.value }))} />
+          <Input label="📝 備註" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} placeholder="自由填寫" />
+          <Input label="🍱 餐費（純記錄）" type="number" value={form.mealFee} onChange={e => setForm(f => ({ ...f, mealFee: e.target.value }))} />
+          <Input label="🎰 Jackpot（純記錄）" type="number" value={form.jackpot} onChange={e => setForm(f => ({ ...f, jackpot: e.target.value }))} />
+        </div>
+        <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 4,
+          padding: "7px 12px", display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12 }}>
+          <span style={{ color: C.dim }}>水錢餘 = {fmtAbs(fv("totalWater"))} − {fmtAbs(fv("venueFee"))} − {fmtAbs(fv("dealerWage"))}</span>
+          <span style={{ fontFamily: "monospace", fontWeight: 700, color: reserve >= 0 ? C.green : C.red }}>{fmt(reserve)}</span>
+        </div>
+
+        {/* Dealer 小費 */}
+        <div style={{ marginTop: 18 }}>
+          <SectionHeader>Dealer 小費</SectionHeader>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, color: C.dim }}>Dealer 姓名</label>
+              <select value={dealerTip.memberId} onChange={e => setDealerTip(t => ({ ...t, memberId: e.target.value }))} style={sel()}>
+                <option value="">-- 選擇 Dealer --</option>
+                {dealerMembers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+            <Input label="小費金額" type="number" placeholder="e.g. 13000" value={dealerTip.amount}
+              onChange={e => setDealerTip(t => ({ ...t, amount: e.target.value }))}
+              style={{ borderColor: dealerTip.amount ? C.gold+"66" : C.border, color: C.gold }} />
+          </div>
+        </div>
+
+        {/* 玩家輸贏 */}
+        <div style={{ marginTop: 18 }}>
+          <SectionHeader>玩家輸贏</SectionHeader>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 120px 28px", gap: 6, marginBottom: 6 }}>
+            {["玩家", "贏／輸", "金額", ""].map((h, i) => (
+              <span key={i} style={{ fontSize: 11, color: C.dim }}>{h}</span>
+            ))}
+          </div>
+          {players.map((p, i) => {
+            const isWin = p.sign === "win";
+            return (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 90px 120px 28px", gap: 6, marginBottom: 7, alignItems: "center" }}>
+                {/* 玩家下拉 — 過濾掉已選的玩家（保留當前列） */}
+                <select value={p.memberId} onChange={e => updatePlayer(i, { memberId: e.target.value })} style={sel()}>
+                  <option value="">-- 選玩家 --</option>
+                  {playableMembers
+                    .filter(m => m.id === p.memberId || !players.some(pp => pp.memberId === m.id))
+                    .map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+                {/* 贏/輸下拉 */}
+                <select value={p.sign} onChange={e => updatePlayer(i, { sign: e.target.value })} style={sel({
+                  background: isWin ? C.green+"22" : C.red+"22",
+                  border: `1px solid ${isWin ? C.green+"66" : C.red+"66"}`,
+                  color: isWin ? C.green : C.red,
+                  fontWeight: 700,
+                })}>
+                  <option value="win">贏</option>
+                  <option value="lose">輸</option>
+                </select>
+                {/* 金額 */}
+                <input type="number" placeholder="金額" value={p.absAmt}
+                  onChange={e => updatePlayer(i, { absAmt: e.target.value })}
+                  style={{ background: C.surface2, border: `1px solid ${p.absAmt ? (isWin ? C.green+"66" : C.red+"66") : C.border}`,
+                    color: isWin ? C.green : C.red, padding: "6px 8px", borderRadius: 4,
+                    fontFamily: "monospace", fontSize: 13, outline: "none", width: "100%", fontWeight: 600 }} />
+                {/* 刪除 */}
+                <button onClick={() => removePlayerRow(i)}
+                  style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>✕</button>
+              </div>
+            );
+          })}
+          <button onClick={addPlayerRow} style={{ background: "transparent", border: `1px dashed ${C.border}`,
+            color: C.dim, borderRadius: 4, cursor: "pointer", fontSize: 12, padding: "5px", width: "100%",
+            marginTop: 3, fontFamily: "inherit" }}>＋ 新增玩家</button>
+        </div>
+
+        {/* 驗證加總 */}
+        {(players.some(p => p.memberId) || tipNum !== 0) && (
+          <div style={{ background: C.surface2, border: `1px solid ${isBalanced ? C.green+"55" : C.red+"33"}`,
+            borderRadius: 4, padding: "8px 12px", marginTop: 10, fontSize: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+              <span style={{ color: C.dim }}>水錢收入</span>
+              <span style={{ fontFamily: "monospace", color: C.gold }}>+{fmtAbs(fv("totalWater"))}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+              <span style={{ color: C.dim }}>Dealer 小費</span>
+              <span style={{ fontFamily: "monospace", color: C.gold }}>+{fmtAbs(tipNum)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+              <span style={{ color: C.dim }}>玩家總和</span>
+              <span style={{ fontFamily: "monospace", color: playerSum >= 0 ? C.green : C.red }}>{fmt(playerSum)}</span>
+            </div>
+            <div style={{ height: 1, background: C.border, margin: "5px 0" }} />
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ fontWeight: 600 }}>合計</span>
+              <span style={{ fontFamily: "monospace", fontWeight: 700,
+                color: isBalanced ? C.green : C.red }}>{fmt(totalCheck)} {isBalanced ? "✓ 平衡" : "✗ 未平衡"}</span>
+            </div>
+          </div>
+        )}
+
+        {/* 特殊牌 */}
+        <div style={{ marginTop: 18 }}>
+          <SectionHeader>特殊牌（純記錄）</SectionHeader>
+          {bonuses.map((b, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 28px", gap: 5, marginBottom: 5, alignItems: "center" }}>
+              <select value={b.type} onChange={e => { const bs=[...bonuses]; bs[i]={...b,type:e.target.value}; setBonuses(bs); }} style={sel()}>
+                <option value="monster">🐲 怪物</option>
+                <option value="highhand">👑 High Hand</option>
+              </select>
+              <select value={b.winner} onChange={e => { const bs=[...bonuses]; bs[i]={...b,winner:e.target.value}; setBonuses(bs); }} style={sel()}>
+                <option value="">-- 得獎者 --</option>
+                {filledForBonus.map((name, j) => <option key={j} value={name}>{name}</option>)}
+              </select>
+              <input type="number" value={b.amount}
+                onChange={e => { const bs=[...bonuses]; bs[i]={...b,amount:parseInt(e.target.value)||0}; setBonuses(bs); }}
+                placeholder="金額" style={{ ...sel(), fontFamily: "monospace" }} />
+              <button onClick={() => setBonuses(bs => bs.filter((_,j)=>j!==i))}
+                style={{ background:"transparent", border:"none", color:C.muted, cursor:"pointer", fontSize:13 }}>✕</button>
+            </div>
+          ))}
+          <button onClick={() => setBonuses(bs => [...bs, { type:"monster", winner:"", amount:3000 }])}
+            style={{ background:"transparent", border:`1px dashed ${C.border}`, color:C.dim, borderRadius:4,
+              cursor:"pointer", fontSize:12, padding:"5px", width:"100%", marginTop:3, fontFamily:"inherit" }}>＋ 新增特殊牌</button>
+        </div>
+
+        <div style={{ marginTop: 20, display: "flex", gap: 8 }}>
+          <Btn onClick={save}>{editingId ? "更新場次" : "儲存場次"}</Btn>
+          <Btn variant="secondary" onClick={clearAll}>清除</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// TAB: SETTLEMENT
+// ═══════════════════════════════════════════════════════
+function TabSettle({ data }) {
+  const { sessions, members } = data;
+  const [selId, setSelId] = useState("");
+  const [pairs, setPairs] = useState([]); // [[id1,id2],...]
+  const [newPair, setNewPair] = useState(["", ""]);
+  const [copied, setCopied] = useState("");
+
+  const s = sessions.find(x => x.id === selId);
+  const { pool, paymentMap, res, dealerTotal } = s ? buildSettle(s, members, pairs) : { pool: [], paymentMap: {}, res: 0, dealerTotal: 0 };
+
+  const sessionPlayers = s ? [...new Set(s.players.filter(p => p.type !== "dealer").map(p => resolveId(p.name, members)))] : [];
+
+  const copyBill = (entry) => {
+    const lines = [`${s.date} 結算帳單`, ""];
+    entry.pays.forEach(p => {
+      lines.push(`${p.toLabel} +${fmtAbs(p.amount)}`);
+      if (p.toBank) lines.push(p.toBank);
+      lines.push("");
+    });
+    lines.push(`合計：-${fmtAbs(entry.total)}`);
+    const text = lines.join("\n");
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setCopied(entry.loserLabel); setTimeout(() => setCopied(""), 2000); });
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <select value={selId} onChange={e => { setSelId(e.target.value); setPairs([]); }}
+          style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text, padding: "7px 12px", borderRadius: 4, fontSize: 13, outline: "none", maxWidth: 260 }}>
+          <option value="">-- 選擇場次 --</option>
+          {[...sessions].reverse().map(s => <option key={s.id} value={s.id}>{s.date} ({s.hours}hr)</option>)}
+        </select>
+      </div>
+
+      {s && <>
+        {/* Pairing UI */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, marginBottom: 16, maxWidth: 500 }}>
+          <SectionHeader>共算配對（選填）</SectionHeader>
+          {pairs.map((pair, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: 13 }}>
+              <span style={{ background: C.surface2, border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 4, color: C.text }}>
+                {pair.map(id => members.find(m => m.id === id)?.name || id).join(" + ")}
+              </span>
+              <button onClick={() => setPairs(ps => ps.filter((_, j) => j !== i))}
+                style={{ background: "transparent", border: "none", color: C.red, cursor: "pointer", fontSize: 13 }}>✕</button>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <select value={newPair[0]} onChange={e => setNewPair(p => [e.target.value, p[1]])}
+              style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text, padding: "6px 9px", borderRadius: 4, fontSize: 12, outline: "none" }}>
+              <option value="">玩家 A</option>
+              {sessionPlayers.map(id => <option key={id} value={id}>{members.find(m => m.id === id)?.name || id}</option>)}
+            </select>
+            <span style={{ color: C.dim }}>＋</span>
+            <select value={newPair[1]} onChange={e => setNewPair(p => [p[0], e.target.value])}
+              style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text, padding: "6px 9px", borderRadius: 4, fontSize: 12, outline: "none" }}>
+              <option value="">玩家 B</option>
+              {sessionPlayers.map(id => <option key={id} value={id}>{members.find(m => m.id === id)?.name || id}</option>)}
+            </select>
+            <Btn variant="dark" onClick={() => {
+              if (newPair[0] && newPair[1] && newPair[0] !== newPair[1]) {
+                setPairs(ps => [...ps, newPair]); setNewPair(["", ""]);
+              }
+            }} style={{ fontSize: 12, padding: "6px 12px" }}>加入配對</Btn>
+          </div>
+        </div>
+
+        {/* Settlement grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
+          <div>
+            {Object.values(paymentMap).map(entry => (
+              <div key={entry.loserId + entry.loserLabel} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
+                <div style={{ padding: "8px 12px", background: "#e0555511", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: C.red, fontWeight: 700, fontSize: 14 }}>▼ {entry.loserLabel}</span>
+                  <span style={{ fontFamily: "monospace", color: C.red, fontWeight: 700, fontSize: 13 }}>須付 {fmtAbs(entry.total)}</span>
+                </div>
+                {entry.pays.map((p, i) => (
+                  <div key={i} style={{ padding: "6px 12px", borderBottom: `1px solid ${C.border}33`, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
+                    <div>
+                      <div style={{ color: C.text }}>{p.toLabel}</div>
+                      {p.toBank && <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim }}>{p.toBank}</div>}
+                    </div>
+                    <span style={{ fontFamily: "monospace", color: C.green, fontWeight: 700 }}>+{fmtAbs(p.amount)}</span>
+                  </div>
+                ))}
+                <div style={{ padding: "5px 10px 8px", textAlign: "right" }}>
+                  <Btn variant="secondary" onClick={() => copyBill(entry)} style={{ fontSize: 11, padding: "4px 10px" }}>
+                    {copied === entry.loserLabel ? "✅ 已複製" : "📋 複製帳單"}
+                  </Btn>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16 }}>
+            <SectionHeader>本場收款方</SectionHeader>
+            {pool.map((p, i) => (
+              <div key={i} style={{ marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, fontSize: 13 }}>
+                  <span>{p.label}{p.splittable && <span style={{ fontSize: 10, color: C.dim, marginLeft: 4 }}>(可拆)</span>}</span>
+                  <span style={{ fontFamily: "monospace", color: C.green }}>+{fmtAbs(p.amount)}</span>
+                </div>
+                {p.bank && <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim }}>{p.bank}</div>}
+              </div>
+            ))}
+            <Divider />
+            <FR label="水錢餘 → Joyce（公積金）" value={fmt(res)} valueColor={res >= 0 ? C.gold : C.red} />
+            <FR label="Dealer（薪+小費）" value={fmt(dealerTotal)} valueColor={dealerTotal >= 0 ? C.green : C.red} />
+          </div>
+        </div>
+      </>}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// TAB: CUMULATIVE
+// ═══════════════════════════════════════════════════════
+function TabCumul({ data }) {
+  const { sessions, members } = data;
+  const map = {};
+  sessions.forEach(s => s.players.forEach(p => {
+    if (p.type === "dealer") return;
+    const k = resolveId(p.name, members);
+    if (!map[k]) map[k] = { name: dispName(p.name, members), count: 0, total: 0, best: -Infinity, worst: Infinity };
+    map[k].count++; map[k].total += p.amount;
+    if (p.amount > map[k].best) map[k].best = p.amount;
+    if (p.amount < map[k].worst) map[k].worst = p.amount;
+  }));
+  const rows = Object.values(map).sort((a, b) => b.total - a.total);
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 11, marginBottom: 22 }}>
+        {[
+          { label: "SESSIONS", value: sessions.length, color: C.gold },
+          { label: "PLAYERS",  value: rows.length, color: C.blue },
+          { label: "最大贏家", value: rows[0]?.name || "-", color: C.green },
+          { label: "最大輸家", value: rows[rows.length - 1]?.name || "-", color: C.red },
+        ].map((s, i) => (
+          <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "13px 15px", textAlign: "center" }}>
+            <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.13em", marginBottom: 6 }}>{s.label}</div>
+            <div style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 700, color: s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr>{["姓名","出席","累計輸贏","最佳場","最差場"].map(h => (
+              <th key={h} style={{ textAlign: "left", padding: "8px 12px", borderBottom: `1px solid ${C.gold}`, color: C.gold, fontSize: 11, fontWeight: 400, letterSpacing: "0.1em", fontFamily: "monospace" }}>{h}</th>
+            ))}</tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                <td style={{ padding: "7px 12px" }}>{r.name}</td>
+                <td style={{ padding: "7px 12px", fontFamily: "monospace" }}>{r.count}</td>
+                <td style={{ padding: "7px 12px", fontFamily: "monospace", fontWeight: 700, color: r.total >= 0 ? C.green : C.red }}>{fmt(r.total)}</td>
+                <td style={{ padding: "7px 12px", fontFamily: "monospace", color: C.green }}>{r.best === -Infinity ? "-" : fmt(r.best)}</td>
+                <td style={{ padding: "7px 12px", fontFamily: "monospace", color: C.red }}>{r.worst === Infinity ? "-" : fmt(r.worst)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// TAB: RESERVE
+// ═══════════════════════════════════════════════════════
+function TabReserve({ data, setData }) {
+  const dialog = useDialog();
+  const { sessions, expenses = [] } = data;
+  const [modal, setModal] = useState(false);
+  const [form, setForm] = useState({ date: "", amount: "", desc: "" });
+
+  const events = [
+    ...sessions.map(s => ({ date: s.date, amount: calcReserve(s), note: s.note, kind: "session", id: s.id })),
+    ...expenses.map(e => ({ date: e.date, amount: -e.amount, note: e.desc, kind: "expense", id: e.id })),
+  ].sort((a, b) => a.date < b.date ? -1 : 1);
+
+  let run = 0;
+  const items = events.map(ev => { run += ev.amount; return { ...ev, run }; });
+  const total = run;
+
+  const saveExpense = () => {
+    if (!form.date || !form.amount) { dialog.alert("請填日期和金額"); return; }
+    const newExp = { id: "e" + Date.now(), date: form.date, amount: parseInt(form.amount) || 0, desc: form.desc };
+    setData(d => ({ ...d, expenses: [...(d.expenses || []), newExp].sort((a, b) => a.date < b.date ? -1 : 1) }));
+    setModal(false); setForm({ date: "", amount: "", desc: "" });
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 14, alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap" }}>
+        <div style={{ background: "linear-gradient(135deg,rgba(201,168,76,.15),rgba(201,168,76,.05))", border: `1px solid ${C.gold}`, borderRadius: 8, padding: "16px 24px", textAlign: "center" }}>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.14em", marginBottom: 6 }}>公積金餘額</div>
+          <div style={{ fontFamily: "monospace", fontSize: 28, fontWeight: 700, color: C.goldLight }}>${fmtAbs(total)}</div>
+        </div>
+        <Btn onClick={() => setModal(true)} style={{ alignSelf: "flex-end" }}>－ 新增支出</Btn>
+      </div>
+
+      <div style={{ maxWidth: 540 }}>
+        {items.map((it, i) => (
+          <div key={it.id} style={{ display: "flex", gap: 16 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 16, flexShrink: 0 }}>
+              <div style={{ width: 10, height: 10, borderRadius: "50%", marginTop: 5, flexShrink: 0, border: `2px solid ${C.bg}`,
+                background: it.kind === "expense" ? C.blue : it.amount < 0 ? C.red : C.gold }} />
+              {i < items.length - 1 && <div style={{ width: 2, flex: 1, background: C.border, minHeight: 26 }} />}
+            </div>
+            <div style={{ paddingBottom: 20, flex: 1 }}>
+              <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim, marginBottom: 4 }}>
+                {it.date} {it.kind === "expense" && <span style={{ fontSize: 10, color: C.blue }}>[支出]</span>}
+              </div>
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 5, padding: "10px 12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: it.amount >= 0 ? C.gold : C.red }}>{fmt(it.amount)}</span>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, color: C.dim }}>累計 {fmt(it.run)}</span>
+                    {it.kind === "expense" && (
+                      <button onClick={async () => {
+                        if (await dialog.confirm("刪除此支出？")) setData(d => ({ ...d, expenses: d.expenses.filter(e => e.id !== it.id) }));
+                      }} style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>✕</button>
+                    )}
+                  </div>
+                </div>
+                {it.note && <div style={{ fontSize: 11, color: C.dim, marginTop: 3 }}>📝 {it.note}</div>}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <Modal open={modal} title="新增公積金支出" onClose={() => setModal(false)} onSave={saveExpense}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Input label="📅 日期" type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+          <Input label="💸 金額" type="number" placeholder="e.g. 3200" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+          <Input label="📝 說明" placeholder="e.g. 餐費 Shaan 2200" value={form.desc} onChange={e => setForm(f => ({ ...f, desc: e.target.value }))} />
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// TAB: BONUS
+// ═══════════════════════════════════════════════════════
+function TabBonus({ data }) {
+  const { sessions, members } = data;
+  const all = sessions.flatMap(s => (s.bonusEvents || []).map(b => ({ date: s.date, ...b })));
+  const mTotal = all.filter(b => b.type === "monster").reduce((a, b) => a + b.amount, 0);
+  const hTotal = all.filter(b => b.type === "highhand").reduce((a, b) => a + b.amount, 0);
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 11, marginBottom: 22 }}>
+        {[
+          { label: "🐲 怪物累計", value: `$${fmtAbs(mTotal)}`, color: "#f87171" },
+          { label: "👑 High Hand累計", value: `$${fmtAbs(hTotal)}`, color: C.goldLight },
+          { label: "發出總計", value: `$${fmtAbs(mTotal + hTotal)}`, color: C.text },
+        ].map((s, i) => (
+          <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "13px 15px", textAlign: "center" }}>
+            <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.13em", marginBottom: 6 }}>{s.label}</div>
+            <div style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 700, color: s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr>{["場次","類型","得獎者","金額"].map(h => (
+            <th key={h} style={{ textAlign: "left", padding: "8px 12px", borderBottom: `1px solid ${C.gold}`, color: C.gold, fontSize: 11, fontWeight: 400, fontFamily: "monospace" }}>{h}</th>
+          ))}</tr>
+        </thead>
+        <tbody>
+          {all.length ? all.map((b, i) => (
+            <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+              <td style={{ padding: "7px 12px", fontFamily: "monospace" }}>{b.date}</td>
+              <td style={{ padding: "7px 12px" }}>
+                <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 10, fontFamily: "monospace",
+                  background: b.type === "monster" ? "#e0555522" : C.gold+"22",
+                  color: b.type === "monster" ? "#f87171" : C.goldLight,
+                  border: `1px solid ${b.type === "monster" ? "#e0555544" : C.gold+"44"}` }}>
+                  {b.type === "monster" ? "🐲 怪物" : "👑 HH"}
+                </span>
+              </td>
+              <td style={{ padding: "7px 12px" }}>{dispName(b.winner, members)}</td>
+              <td style={{ padding: "7px 12px", fontFamily: "monospace", color: C.gold }}>+{fmtAbs(b.amount)}</td>
+            </tr>
+          )) : <tr><td colSpan={4} style={{ textAlign: "center", padding: 30, color: C.muted }}>尚無記錄</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// TAB: MEMBERS
+// ═══════════════════════════════════════════════════════
+function TabMembers({ data, setData }) {
+  const { members } = data;
+  const [modal, setModal] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({ name: "", aliases: "", bank: "", type: "member" });
+  const [defaultType, setDefaultType] = useState("member");
+
+  const TYPE_LABEL = { member: "成員", dealer: "Dealer", guest: "來賓", venue: "場地" };
+  const TYPE_COLOR = { member: C.blue, dealer: C.gold, guest: C.accent, venue: C.green };
+
+  const openAdd = (type) => { setDefaultType(type); setEditId(null); setForm({ name: "", aliases: "", bank: "", type }); setModal(true); };
+  const openEdit = (m) => { setEditId(m.id); setForm({ name: m.name, aliases: m.aliases.join(","), bank: m.bank, type: m.type }); setModal(true); };
+
+  const dialog = useDialog();
+  const save = async () => {
+    const name = form.name.trim();
+    if (!name) { await dialog.alert("請填名稱"); return; }
+    const aliases = form.aliases.split(",").map(a => a.trim()).filter(Boolean);
+    if (!aliases.includes(name)) aliases.unshift(name);
+    if (editId) {
+      const entry = { id: editId, name, aliases, bank: form.bank, type: form.type };
+      setData(d => ({ ...d, members: d.members.map(m => m.id === editId ? entry : m) }));
+    } else {
+      if (members.find(m => m.id === name)) { await dialog.alert(`名稱「${name}」已存在，請改用其他名稱`); return; }
+      const entry = { id: name, name, aliases, bank: form.bank, type: form.type };
+      setData(d => ({ ...d, members: [...d.members, entry] }));
+    }
+    setModal(false);
+  };
+
+  const del = async () => {
+    if (!(await dialog.confirm("確定刪除？"))) return;
+    setData(d => ({ ...d, members: d.members.filter(m => m.id !== editId) }));
+    setModal(false);
+  };
+
+  const order = { member: 0, dealer: 1, venue: 2, guest: 3 };
+  const sorted = [...members].sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9) || a.name.localeCompare(b.name));
+
+  return (
+    <div>
+      <div style={{ marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Btn onClick={() => openAdd("member")}>＋ 新增成員</Btn>
+        <Btn variant="accent" onClick={() => openAdd("guest")}>＋ 新增來賓</Btn>
+        <Btn variant="dark" onClick={() => openAdd("dealer")}>＋ 新增Dealer</Btn>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(250px,1fr))", gap: 10 }}>
+        {sorted.map(m => (
+          <div key={m.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>
+                {m.name}
+                <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, marginLeft: 5, background: (TYPE_COLOR[m.type] || C.dim) + "22", color: TYPE_COLOR[m.type] || C.dim, border: `1px solid ${(TYPE_COLOR[m.type] || C.dim)}44` }}>
+                  {TYPE_LABEL[m.type] || m.type}
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>別名：{m.aliases.join("、")}</div>
+              <div style={{ fontFamily: "monospace", fontSize: 11, color: C.muted, marginTop: 2 }}>{m.bank || "—"}</div>
+            </div>
+            <button onClick={() => openEdit(m)} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.dim, padding: "3px 9px", borderRadius: 4, cursor: "pointer", fontSize: 11, whiteSpace: "nowrap" }}>編輯</button>
+          </div>
+        ))}
+      </div>
+
+      <Modal open={modal} title={editId ? `編輯：${form.name}` : `新增${TYPE_LABEL[defaultType]}`} onClose={() => setModal(false)} onSave={save}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Input label="顯示名稱" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="名稱" />
+          <Input label="別名（逗號分隔）" value={form.aliases} onChange={e => setForm(f => ({ ...f, aliases: e.target.value }))} placeholder="別名1,別名2" />
+          <Input label="銀行帳號（選填）" value={form.bank} onChange={e => setForm(f => ({ ...f, bank: e.target.value }))} placeholder="e.g. 012-123456789" />
+          <Select label="類型" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
+            <option value="member">成員</option>
+            <option value="guest">來賓</option>
+            <option value="dealer">Dealer</option>
+            <option value="venue">場地</option>
+          </Select>
+          {editId && <Btn variant="danger" onClick={del} style={{ marginTop: 4 }}>🗑 刪除成員</Btn>}
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// TAB: BACKUP / RESTORE
+// ═══════════════════════════════════════════════════════
+const BACKUP_KEY = "pokerclub_backups";
+
+function TabBackup({ data, setData }) {
+  const dialog = useDialog();
+  const [exportText, setExportText] = useState("");
+  const [importText, setImportText] = useState("");
+  const [msg, setMsg] = useState("");
+  const [showCloud, setShowCloud] = useState(false);
+  const [cloudBackups, setCloudBackups] = useState([]);
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const [note, setNote] = useState("");
+
+  const showMsg = (text, isErr = false) => {
+    setMsg({ text, isErr });
+    setTimeout(() => setMsg(""), 4000);
+  };
+
+  // ── 主要備份方式：複製貼上 JSON ──
+  const generateExport = () => {
+    setExportText(JSON.stringify(data, null, 2));
+    showMsg("✅ 已產生 JSON，請複製文字框內容並貼到備忘錄/LINE 保存");
+  };
+
+  const copyToClipboard = async () => {
+    if (!exportText) {
+      showMsg("⚠️ 請先按「產生備份 JSON」", true);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(exportText);
+      showMsg("✅ 已複製到剪貼簿");
+    } catch (e) {
+      showMsg("❌ 自動複製失敗，請手動長按文字框選取後複製", true);
+    }
+  };
+
+  const importFromText = async () => {
+    if (!importText.trim()) {
+      showMsg("⚠️ 請貼上備份 JSON 文字", true);
+      return;
+    }
+    if (!(await dialog.confirm("匯入後當前資料會被覆蓋，確定？"))) return;
+    try {
+      const parsed = JSON.parse(importText);
+      if (!parsed.sessions || !parsed.members) throw new Error("格式不正確：缺少 sessions 或 members");
+      setData(() => parsed);
+      setImportText("");
+      showMsg("✅ 匯入成功");
+    } catch (e) {
+      showMsg("❌ 匯入失敗：" + e.message, true);
+    }
+  };
+
+  // ── 雲端備份：使用 Firestore 子集合 ──
+  const loadCloudBackups = async () => {
+    setCloudBusy(true);
+    try {
+      const fb = await getFirebase();
+      const colRef = fb.collection(fb.db, BACKUP_COL);
+      const q = fb.query(colRef, fb.orderBy("ts", "desc"), fb.limit(20));
+      const snap = await fb.getDocs(q);
+      const list = [];
+      snap.forEach(d => {
+        const x = d.data();
+        list.push({
+          id: d.id, ts: x.ts, note: x.note || "",
+          sessionCount: x.sessionCount, memberCount: x.memberCount, expenseCount: x.expenseCount,
+          sizeKB: x.sizeKB || 0,
+        });
+      });
+      setCloudBackups(list);
+    } catch (e) {
+      console.error(e);
+      setCloudBackups([]);
+    }
+    setCloudBusy(false);
+  };
+
+  useEffect(() => {
+    if (showCloud) loadCloudBackups();
+  }, [showCloud]);
+
+  const createCloudBackup = async () => {
+    setCloudBusy(true);
+    try {
+      const fb = await getFirebase();
+      const id = "b" + Date.now();
+      const snapshot = JSON.stringify(data);
+      const sizeKB = Math.round(snapshot.length / 1024);
+      await fb.setDoc(fb.doc(fb.db, BACKUP_COL, id), {
+        ts: Date.now(), note: note || "",
+        sessionCount: data.sessions.length,
+        memberCount: data.members.length,
+        expenseCount: (data.expenses || []).length,
+        sizeKB, snapshot,
+      });
+      await loadCloudBackups();
+      setNote("");
+      showMsg(`✅ 雲端備份已建立 (${sizeKB}KB)`);
+    } catch (e) {
+      showMsg("❌ 雲端備份失敗：" + e.message, true);
+    }
+    setCloudBusy(false);
+  };
+
+  const restoreCloud = async (backup) => {
+    if (!(await dialog.confirm(`還原到 ${new Date(backup.ts).toLocaleString("zh-TW")} 的備份？當前資料會被覆蓋`))) return;
+    try {
+      const fb = await getFirebase();
+      const snap = await fb.getDoc(fb.doc(fb.db, BACKUP_COL, backup.id));
+      if (!snap.exists()) throw new Error("找不到備份內容");
+      const restored = JSON.parse(snap.data().snapshot);
+      setData(() => restored);
+      showMsg("✅ 已還原");
+    } catch (e) {
+      showMsg("❌ 還原失敗：" + e.message, true);
+    }
+  };
+
+  const deleteCloud = async (id) => {
+    if (!(await dialog.confirm("確定刪除此備份？"))) return;
+    try {
+      const fb = await getFirebase();
+      await fb.deleteDoc(fb.doc(fb.db, BACKUP_COL, id));
+      setCloudBackups(cloudBackups.filter(b => b.id !== id));
+      showMsg("已刪除");
+    } catch (e) {
+      showMsg("❌ 刪除失敗：" + e.message, true);
+    }
+  };
+
+  const clearAllCloud = async () => {
+    if (!(await dialog.confirm("確定清空所有雲端備份？"))) return;
+    try {
+      const fb = await getFirebase();
+      for (const b of cloudBackups) {
+        try { await fb.deleteDoc(fb.doc(fb.db, BACKUP_COL, b.id)); } catch {}
+      }
+      setCloudBackups([]);
+      showMsg("✅ 已清空");
+    } catch (e) {
+      showMsg("❌ 清空失敗：" + e.message, true);
+    }
+  };
+
+  const fmtDate = (ts) => new Date(ts).toLocaleString("zh-TW", { year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      {msg && (
+        <div style={{ background: msg.isErr ? C.red+"22" : C.green+"22",
+          border: `1px solid ${msg.isErr ? C.red : C.green}44`,
+          color: msg.isErr ? C.red : C.green,
+          padding: "8px 14px", borderRadius: 4, marginBottom: 14, fontSize: 13 }}>{msg.text}</div>
+      )}
+
+      {/* 主要備份：複製貼上 JSON（最可靠） */}
+      <div style={{ background: C.surface, border: `1px solid ${C.gold}`, borderRadius: 8, padding: 18, marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.goldLight, marginBottom: 6 }}>
+          💾 備份 JSON（推薦使用）
+        </div>
+        <div style={{ fontSize: 11, color: C.dim, marginBottom: 12, lineHeight: 1.5 }}>
+          這是最可靠的方式：產生 JSON 文字後複製貼到備忘錄或 LINE 保存。<br />
+          目前資料：{data.sessions.length} 場 · {data.members.length} 成員 · {(data.expenses || []).length} 公積金支出
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          <Btn onClick={generateExport}>📋 產生備份 JSON</Btn>
+          {exportText && <Btn variant="secondary" onClick={copyToClipboard}>📑 一鍵複製</Btn>}
+        </div>
+        {exportText && (
+          <textarea readOnly value={exportText} onClick={e => e.target.select()}
+            style={{ width: "100%", minHeight: 120, background: C.surface2, border: `1px solid ${C.border}`,
+              color: C.text, padding: 10, borderRadius: 4, fontFamily: "monospace", fontSize: 11,
+              outline: "none", resize: "vertical", boxSizing: "border-box" }} />
+        )}
+      </div>
+
+      {/* 從 JSON 還原 */}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18, marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.goldLight, marginBottom: 6 }}>
+          🔄 從 JSON 還原
+        </div>
+        <div style={{ fontSize: 11, color: C.dim, marginBottom: 10 }}>把先前複製的 JSON 文字貼進來，按「匯入」即可還原</div>
+        <textarea value={importText} onChange={e => setImportText(e.target.value)}
+          placeholder="貼上 JSON 文字..."
+          style={{ width: "100%", minHeight: 100, background: C.surface2, border: `1px solid ${C.border}`,
+            color: C.text, padding: 10, borderRadius: 4, fontFamily: "monospace", fontSize: 11,
+            outline: "none", resize: "vertical", boxSizing: "border-box", marginBottom: 10 }} />
+        <Btn onClick={importFromText}>⬆️ 匯入</Btn>
+      </div>
+
+      {/* 雲端備份（折疊） */}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18 }}>
+        <div onClick={() => setShowCloud(!showCloud)}
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.dim }}>
+            🗂 雲端備份歷史 {showCloud ? "▼" : "▶"}
+          </div>
+          <span style={{ fontSize: 11, color: C.muted }}>（不穩定，僅作輔助）</span>
+        </div>
+
+        {showCloud && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "stretch" }}>
+              <input type="text" placeholder="備註（選填）"
+                value={note} onChange={e => setNote(e.target.value)}
+                style={{ flex: 1, minWidth: 120, background: C.surface2, border: `1px solid ${C.border}`, color: C.text,
+                  padding: "7px 10px", borderRadius: 4, fontSize: 13, outline: "none" }} />
+              <Btn onClick={createCloudBackup} disabled={cloudBusy}>📸 雲端備份</Btn>
+              {cloudBackups.length > 0 && (
+                <button onClick={clearAllCloud} style={{ background: "transparent", border: `1px solid ${C.red}55`,
+                  color: C.red, padding: "0 12px", borderRadius: 4, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>
+                  🗑 清空
+                </button>
+              )}
+            </div>
+            {cloudBusy ? <div style={{ color: C.dim, fontSize: 13 }}>讀取中...</div>
+              : cloudBackups.length === 0 ? <div style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "16px 0" }}>沒有雲端備份</div>
+              : cloudBackups.map(b => (
+                <div key={b.id} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6,
+                  padding: "10px 14px", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: "monospace", fontSize: 12, color: C.goldLight }}>{fmtDate(b.ts)}</div>
+                    <div style={{ fontSize: 10, color: C.dim, marginTop: 2 }}>
+                      {b.sessionCount}場 · {b.memberCount}成員{b.sizeKB ? ` · ${b.sizeKB}KB` : ""}{b.note && ` · ${b.note}`}
+                    </div>
+                  </div>
+                  <Btn variant="secondary" onClick={() => restoreCloud(b)} style={{ fontSize: 10, padding: "4px 10px" }}>🔄 還原</Btn>
+                  <button onClick={() => deleteCloud(b.id)}
+                    style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted,
+                      padding: "4px 8px", borderRadius: 4, cursor: "pointer", fontSize: 10 }}>🗑</button>
+                </div>
+              ))
+            }
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════════════
+const TABS = [
+  { id: "new",      label: "➕ 新增" },
+  { id: "records",  label: "📋 場次" },
+  { id: "settle",   label: "💸 結算" },
+  { id: "cumul",    label: "📊 統計" },
+  { id: "reserve",  label: "🏦 公積金" },
+  { id: "bonus",    label: "🃏 特殊牌" },
+  { id: "members",  label: "👥 成員" },
+  { id: "backup",   label: "🛡️ 備份" },
+];
+
+function PokerApp() {
+  const [tab, setTab] = useState("new");
+  const [data, setDataState] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+
+  const handleEdit = (sessionId) => {
+    setEditingId(sessionId);
+    setTab("new");
+  };
+
+  // Load from Firebase + 即時同步
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [error, setError] = useState("");
+  const isWritingRef = useRef(false);
+  const fbRef = useRef(null);
+
+  useEffect(() => {
+    let unsubscribe = null;
+    (async () => {
+      try {
+        const fb = await getFirebase();
+        fbRef.current = fb;
+        const dataDoc = fb.doc(fb.db, "pokerclub", "main");
+
+        // 第一次載入
+        const snap = await fb.getDoc(dataDoc);
+        if (snap.exists() && snap.data().payload) {
+          setDataState(JSON.parse(snap.data().payload));
+        } else {
+          await fb.setDoc(dataDoc, { payload: JSON.stringify(USER_DEFAULT_DATA), updatedAt: Date.now() });
+          setDataState(USER_DEFAULT_DATA);
+        }
+        setLoading(false);
+        setTimeout(() => setHasLoaded(true), 100);
+
+        // 訂閱即時更新
+        unsubscribe = fb.onSnapshot(dataDoc, (snap) => {
+          if (isWritingRef.current) return;
+          if (snap.exists() && snap.data().payload) {
+            setDataState(JSON.parse(snap.data().payload));
+          }
+        });
+      } catch (e) {
+        setError("Firebase 連線失敗：" + e.message);
+        setDataState(USER_DEFAULT_DATA);
+        setLoading(false);
+      }
+    })();
+    return () => { if (unsubscribe) unsubscribe(); };
+  }, []);
+
+  // Save to Firebase whenever data changes
+  const setData = useCallback((updater) => {
+    setDataState(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      if (!hasLoaded || !fbRef.current) return next;
+
+      const fb = fbRef.current;
+      const dataDoc = fb.doc(fb.db, "pokerclub", "main");
+      isWritingRef.current = true;
+      setSaving(true);
+      fb.setDoc(dataDoc, { payload: JSON.stringify(next), updatedAt: Date.now() })
+        .then(() => {
+          setTimeout(() => { setSaving(false); isWritingRef.current = false; }, 500);
+        })
+        .catch((e) => {
+          setSaving(false);
+          isWritingRef.current = false;
+          setError("儲存失敗：" + e.message);
+        });
+      return next;
+    });
+  }, [hasLoaded]);
+
+  if (loading) return (
+    <div style={{ background: C.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: C.dim, fontFamily: "monospace" }}>
+      載入中...
+    </div>
+  );
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", color: C.text, fontFamily: "'Noto Serif TC', serif" }}>
+      {/* Header */}
+      <div style={{ background: "linear-gradient(135deg,#0a0c10,#12151e)", borderBottom: `1px solid ${C.gold}`,
+        padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
+        position: "sticky", top: 0, zIndex: 100, gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.goldLight, letterSpacing: "0.1em" }}>🎴 官邸聚會帳務</div>
+          <div style={{ fontSize: 10, color: error ? C.red : C.dim, fontFamily: "monospace", marginTop: 1 }}>
+            FIREBASE · {error ? "❌ " + error : (saving ? "⏳ 儲存中..." : "✓ 已同步")}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              style={{ background: tab === t.id ? "rgba(201,168,76,.12)" : "transparent",
+                border: `1px solid ${tab === t.id ? C.gold : C.border}`,
+                color: tab === t.id ? C.gold : C.dim,
+                padding: "5px 11px", borderRadius: 4, cursor: "pointer",
+                fontFamily: "inherit", fontSize: 12, transition: "all .15s" }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Body */}
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "22px 16px" }}>
+        <div style={{ marginBottom: 16 }}>
+          <SectionHeader>{TABS.find(t => t.id === tab)?.label || ""}</SectionHeader>
+        </div>
+        {tab === "records"  && <TabRecords  data={data} setData={setData} onEdit={handleEdit} />}
+        {tab === "new"      && <TabNew      data={data} setData={setData} editingId={editingId} clearEditing={() => setEditingId(null)} />}
+        {tab === "settle"   && <TabSettle   data={data} />}
+        {tab === "cumul"    && <TabCumul    data={data} />}
+        {tab === "reserve"  && <TabReserve  data={data} setData={setData} />}
+        {tab === "bonus"    && <TabBonus    data={data} />}
+        {tab === "members"  && <TabMembers  data={data} setData={setData} />}
+        {tab === "backup"   && <TabBackup   data={data} setData={setData} />}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <DialogProvider>
+      <PokerApp />
+    </DialogProvider>
+  );
+}
+
+
+document.getElementById("loading").style.display = "none";
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App));
+</script>
+
+</body>
+</html>
