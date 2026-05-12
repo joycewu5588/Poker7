@@ -9,6 +9,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="官邸帳務">
 <title>🎴 官邸聚會帳務</title>
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+<meta name="googlebot" content="noindex, nofollow">
+<meta name="bingbot" content="noindex, nofollow">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎴</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -17,10 +20,74 @@
   #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #c9a84c; font-family: 'IBM Plex Mono', monospace; font-size: 14px; flex-direction: column; gap: 12px; }
   .spin { width: 32px; height: 32px; border: 3px solid #2a3050; border-top-color: #c9a84c; border-radius: 50%; animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  #pw-gate { position: fixed; inset: 0; background: #0a0c10; z-index: 9999;
+    display: flex; align-items: center; justify-content: center; flex-direction: column;
+    font-family: 'Noto Serif TC', serif; }
+  #pw-gate .box { background: #12151e; border: 1px solid #c9a84c;
+    border-radius: 8px; padding: 28px 24px; width: 90%; max-width: 320px; text-align: center; }
+  #pw-gate h1 { color: #c9a84c; margin: 0 0 4px; font-size: 22px; font-weight: 700; }
+  #pw-gate p { color: #8d92aa; font-size: 12px; margin: 0 0 18px; font-family: 'IBM Plex Mono', monospace; }
+  #pw-gate input { width: 100%; padding: 10px 12px; background: #1a1f2e; border: 1px solid #2a3050;
+    color: #e8e4d8; border-radius: 4px; font-size: 16px; font-family: 'IBM Plex Mono', monospace;
+    outline: none; box-sizing: border-box; text-align: center; letter-spacing: 4px; }
+  #pw-gate input:focus { border-color: #c9a84c; }
+  #pw-gate button { margin-top: 12px; width: 100%; padding: 10px; background: #c9a84c;
+    color: #0a0c10; border: none; border-radius: 4px; font-size: 14px; font-weight: 700;
+    cursor: pointer; font-family: 'Noto Serif TC', serif; }
+  #pw-gate .err { color: #d97070; font-size: 12px; margin-top: 10px; min-height: 16px;
+    font-family: 'IBM Plex Mono', monospace; }
 </style>
 </head>
 <body>
-<div id="loading"><div class="spin"></div><div>載入中...</div></div>
+<div id="pw-gate">
+  <div class="box">
+    <h1>🎴 官邸聚會帳務</h1>
+    <p>請輸入密碼</p>
+    <input type="password" id="pw-input" inputmode="numeric" autocomplete="off" autofocus />
+    <button id="pw-btn">進入</button>
+    <div class="err" id="pw-err"></div>
+  </div>
+</div>
+<div id="loading" style="display:none"><div class="spin"></div><div>載入中...</div></div>
+<script>
+(function() {
+  var PW = "168168";
+  var SESSION_KEY = "guandi_pw_ok";
+  // Check if already authenticated this session
+  try {
+    if (sessionStorage.getItem(SESSION_KEY) === "1") {
+      document.getElementById("pw-gate").style.display = "none";
+      document.getElementById("loading").style.display = "flex";
+      return;
+    }
+  } catch(e) {}
+
+var input = document.getElementById(“pw-input”);
+var btn = document.getElementById(“pw-btn”);
+var err = document.getElementById(“pw-err”);
+
+function tryUnlock() {
+if (input.value === PW) {
+try { sessionStorage.setItem(SESSION_KEY, “1”); } catch(e) {}
+document.getElementById(“pw-gate”).style.display = “none”;
+document.getElementById(“loading”).style.display = “flex”;
+// Trigger React app to start
+if (window.__startApp) window.__startApp();
+} else {
+err.textContent = “密碼錯誤”;
+input.value = “”;
+input.focus();
+setTimeout(function() { err.textContent = “”; }, 2000);
+}
+}
+
+btn.addEventListener(“click”, tryUnlock);
+input.addEventListener(“keydown”, function(e) {
+if (e.key === “Enter”) tryUnlock();
+});
+})();
+</script>
+
 <div id="root"></div>
 
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -1544,9 +1611,17 @@ function App() {
 }
 
 
-document.getElementById("loading").style.display = "none";
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(React.createElement(App));
+window.__startApp = function() {
+  document.getElementById("loading").style.display = "none";
+  const root = ReactDOM.createRoot(document.getElementById("root"));
+  root.render(React.createElement(App));
+};
+// If user already authenticated this session, start immediately
+try {
+  if (sessionStorage.getItem("guandi_pw_ok") === "1") {
+    window.__startApp();
+  }
+} catch(e) {}
 </script>
 
 </body>
