@@ -71,8 +71,17 @@ if (input.value === PW) {
 try { sessionStorage.setItem(SESSION_KEY, “1”); } catch(e) {}
 document.getElementById(“pw-gate”).style.display = “none”;
 document.getElementById(“loading”).style.display = “flex”;
-// Trigger React app to start
-if (window.__startApp) window.__startApp();
+// Wait for React app to be ready, then start it
+var tries = 0;
+function waitAndStart() {
+if (window.__startApp) {
+window.__startApp();
+} else if (tries < 100) {
+tries++;
+setTimeout(waitAndStart, 100);
+}
+}
+waitAndStart();
 } else {
 err.textContent = “密碼錯誤”;
 input.value = “”;
