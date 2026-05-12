@@ -45,6 +45,10 @@ function _pwCheck() {
   if (v === "168168") {
     try { sessionStorage.setItem("guandi_pw_ok", "1"); } catch(e) {}
     document.getElementById("pw-gate").style.display = "none";
+    // After password, show user selection if not already chosen
+    if (!window.__currentUser) {
+      _showUserGate();
+    }
   } else {
     document.getElementById("pw-err").textContent = "密碼錯誤";
     document.getElementById("pw-input").value = "";
@@ -53,7 +57,6 @@ function _pwCheck() {
   return false;
 }
 function _pwInput() {
-  // Auto-submit when 6 digits entered
   var v = document.getElementById("pw-input").value;
   if (v.length >= 6) {
     _pwCheck();
@@ -61,6 +64,9 @@ function _pwInput() {
 }
 </script>
 <div id="loading"><div class="spin"></div><div>載入中...</div></div>
+
+<!-- 密碼閘門 -->
+
 <div id="pw-gate">
   <form class="box" onsubmit="return _pwCheck();" action="javascript:void(0)">
     <h1>🎴 官邸聚會帳務</h1>
@@ -70,13 +76,68 @@ function _pwInput() {
     <div class="err" id="pw-err"></div>
   </form>
 </div>
+
+<!-- 身份選擇 -->
+
+<div id="user-gate" style="display:none; position:fixed; inset:0; background:#0a0c10; z-index:99998; flex-direction:column; align-items:center; justify-content:center; font-family:'Noto Serif TC',serif;">
+  <div style="background:#12151e; border:1px solid #c9a84c; border-radius:8px; padding:24px 20px; width:90%; max-width:380px;">
+    <h2 style="color:#c9a84c; margin:0 0 4px; font-size:18px; text-align:center;">你是誰？</h2>
+    <p style="color:#8d92aa; font-size:12px; text-align:center; margin:0 0 18px; font-family:'IBM Plex Mono',monospace;">選擇身份以記錄編輯者</p>
+    <div id="user-buttons" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;"></div>
+    <button onclick="_logoutPw()" style="margin-top:14px; width:100%; padding:7px; background:transparent; color:#8d92aa; border:1px solid #2a3050; border-radius:4px; font-size:11px; cursor:pointer; font-family:inherit;">← 返回密碼</button>
+  </div>
+</div>
+
 <script>
+var EDITORS = ["尚紘","Gary","Joyce","Shaan","Eric","恰吉","華導"];
+
+function _renderUserButtons() {
+  var c = document.getElementById("user-buttons");
+  c.innerHTML = "";
+  EDITORS.forEach(function(name) {
+    var btn = document.createElement("button");
+    btn.textContent = name;
+    btn.style.cssText = "padding:11px; background:#1a1f2e; color:#e8e4d8; border:1px solid #2a3050; border-radius:4px; font-size:14px; font-weight:600; cursor:pointer; font-family:inherit; transition:all .15s;";
+    btn.onclick = function() { _selectUser(name); };
+    btn.ontouchend = function(e) { e.preventDefault(); _selectUser(name); };
+    c.appendChild(btn);
+  });
+}
+
+function _selectUser(name) {
+  try { localStorage.setItem("guandi_user", name); } catch(e) {}
+  window.__currentUser = name;
+  document.getElementById("user-gate").style.display = "none";
+}
+
+function _logoutPw() {
+  try { sessionStorage.removeItem("guandi_pw_ok"); } catch(e) {}
+  document.getElementById("user-gate").style.display = "none";
+  document.getElementById("pw-gate").style.display = "flex";
+  document.getElementById("pw-input").value = "";
+  document.getElementById("pw-input").focus();
+}
+
+function _showUserGate() {
+  _renderUserButtons();
+  document.getElementById("user-gate").style.display = "flex";
+}
+
+// Check existing user
 try {
+  var savedUser = localStorage.getItem("guandi_user");
+  if (savedUser && EDITORS.indexOf(savedUser) !== -1) {
+    window.__currentUser = savedUser;
+  }
   if (sessionStorage.getItem("guandi_pw_ok") === "1") {
     document.getElementById("pw-gate").style.display = "none";
+    if (!window.__currentUser) {
+      _showUserGate();
+    }
   }
 } catch(e) {}
 </script>
+
 <div id="root"></div>
 
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -480,26 +541,29 @@ function TabRecords({ data, setData, onEdit }) {
         const res = calcReserve(s);
         const dealer = s.players.find(p => p.type === "dealer");
         const regular = s.players.filter(p => p.type !== "dealer");
-        // Check balance to mark in-progress
-        const tipNum = dealer ? dealer.amount : 0;
-        const playerSum = regular.reduce((a, p) => a + p.amount, 0);
-        const balance = s.totalWater + tipNum + playerSum;
-        const inProgress = balance !== 0;
+        // 未結算 = 沒勾選 settled
+        const inProgress = !s.settled;
+        const editTimeStr = s.lastEditTs ? new Date(s.lastEditTs).toLocaleString("zh-TW", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
         return (
           <div key={s.id} style={{ background: C.surface, border: `1px solid ${inProgress ? C.red+"66" : C.border}`, borderRadius: 8, overflow: "hidden" }}>
             <div style={{ background: C.surface2, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${C.border}` }}>
               <span style={{ fontFamily: "monospace", color: C.goldLight, fontWeight: 700, fontSize: 14 }}>
                 {s.date}
-                {inProgress && <span style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 3, background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, fontWeight: 600 }}>進行中</span>}
+                {inProgress && <span style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 3, background: C.red+"22", color: C.red, border: `1px solid ${C.red}44`, fontWeight: 600 }}>未結算</span>}
               </span>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <span style={{ fontFamily: "monospace", color: C.dim, fontSize: 11 }}>{s.hours}hr</span>
+                <span style={{ fontFamily: "monospace", color: C.dim, fontSize: 11 }}>{s.hours || "?"}hr</span>
                 <button onClick={() => onEdit(s.id)} title="編輯"
                   style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.dim, borderRadius: 3, cursor: "pointer", fontSize: 10, padding: "2px 6px" }}>✎</button>
                 <button onClick={() => deleteSession(s.id)} title="刪除"
                   style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 3, cursor: "pointer", fontSize: 10, padding: "2px 6px" }}>🗑</button>
               </div>
             </div>
+            {(s.lastEditor || editTimeStr) && (
+              <div style={{ padding: "4px 14px", fontSize: 10, color: C.muted, fontFamily: "monospace", borderBottom: `1px solid ${C.border}`, background: C.bg }}>
+                ✎ {s.lastEditor || "?"} 編輯於 {editTimeStr || "?"}
+              </div>
+            )}
             <div style={{ padding: "12px 14px" }}>
               <FR label="水錢收入" value={fmtAbs(s.totalWater)} />
               <FR label="場地費" value={`-${fmtAbs(s.venueFee)}`} valueColor={C.red} />
@@ -556,6 +620,7 @@ function TabNew({ data, setData, editingId, clearEditing }) {
   const [dealerTip, setDealerTip] = useState({ memberId: "", amount: "" });
   const [players, setPlayers] = useState([{ memberId: "", sign: "win", absAmt: "" }]);
   const [bonuses, setBonuses] = useState([]);
+  const [settled, setSettled] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // Load session for editing
@@ -590,6 +655,7 @@ function TabNew({ data, setData, editingId, clearEditing }) {
       setPlayers([{ memberId: "", sign: "win", absAmt: "" }]);
     }
     setBonuses(s.bonusEvents || []);
+    setSettled(!!s.settled);
   }, [editingId]);
 
   const fv = k => parseInt(form[k]) || 0;
@@ -612,13 +678,14 @@ function TabNew({ data, setData, editingId, clearEditing }) {
     setDealerTip({ memberId: "", amount: "" });
     setPlayers([{ memberId: "", sign: "win", absAmt: "" }]);
     setBonuses([]);
+    setSettled(false);
     setSaved(false);
     if (clearEditing) clearEditing();
   };
 
   const dialog = useDialog();
   const save = async () => {
-    if (!form.date || !form.hours || !form.totalWater) { await dialog.alert("請填入日期、時數、水錢收入"); return; }
+    if (!form.date) { await dialog.alert("請至少填入日期"); return; }
     const dealerMember = members.find(m => m.id === dealerTip.memberId);
     const dealerEntry = tipNum !== 0 && dealerMember
       ? [{ name: dealerMember.name, amount: tipNum, type: "dealer" }] : [];
@@ -626,14 +693,18 @@ function TabNew({ data, setData, editingId, clearEditing }) {
       const m = members.find(x => x.id === p.memberId);
       return { name: m ? m.name : p.memberId, amount: signedAmt(p), type: m ? m.type : "member" };
     });
+    const editor = (typeof window !== "undefined" && window.__currentUser) || "";
     const sessionData = {
       id: editingId || "s" + Date.now(), ...form,
-      hours: parseFloat(form.hours), totalWater: fv("totalWater"),
+      hours: parseFloat(form.hours) || 0, totalWater: fv("totalWater"),
       venueFee: fv("venueFee"), dealerWage: fv("dealerWage"),
       mealFee: fv("mealFee"), jackpot: fv("jackpot"),
       reserveOverride: reserve,
       players: [...dealerEntry, ...filledPlayers],
       bonusEvents: bonuses.filter(b => b.winner),
+      settled: settled,
+      lastEditor: editor,
+      lastEditTs: Date.now(),
     };
     const newSessions = editingId
       ? data.sessions.map(s => s.id === editingId ? sessionData : s).sort((a, b) => a.date < b.date ? -1 : 1)
@@ -798,7 +869,25 @@ function TabNew({ data, setData, editingId, clearEditing }) {
               cursor:"pointer", fontSize:12, padding:"5px", width:"100%", marginTop:3, fontFamily:"inherit" }}>＋ 新增特殊牌</button>
         </div>
 
-        <div style={{ marginTop: 20, display: "flex", gap: 8 }}>
+        {/* 結算狀態 */}
+        <div style={{ marginTop: 18, padding: "10px 14px", background: settled ? C.green+"15" : C.surface2,
+          border: `1px solid ${settled ? C.green+"55" : C.border}`, borderRadius: 6,
+          display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
+          onClick={() => setSettled(s => !s)}>
+          <div style={{ width: 22, height: 22, borderRadius: 4,
+            border: `2px solid ${settled ? C.green : C.dim}`,
+            background: settled ? C.green : "transparent",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            color: "#0a0c10", fontWeight: 900, fontSize: 14 }}>{settled ? "✓" : ""}</div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: settled ? C.green : C.text }}>結算完成</div>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 1 }}>
+              {settled ? "此場次已收尾，不會顯示為進行中" : "勾選後標記此場次已收尾"}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
           <Btn onClick={save}>{editingId ? "更新場次" : "儲存場次"}</Btn>
           <Btn variant="secondary" onClick={clearAll}>清除</Btn>
         </div>
@@ -1557,6 +1646,13 @@ function PokerApp() {
           <div style={{ fontSize: 18, fontWeight: 700, color: C.goldLight, letterSpacing: "0.1em" }}>🎴 官邸聚會帳務</div>
           <div style={{ fontSize: 10, color: error ? C.red : C.dim, fontFamily: "monospace", marginTop: 1 }}>
             FIREBASE · {error ? "❌ " + error : (saving ? "⏳ 儲存中..." : "✓ 已同步")}
+            {typeof window !== "undefined" && window.__currentUser && <span style={{ marginLeft: 8, color: C.gold }}>👤 {window.__currentUser}</span>}
+            <button onClick={() => {
+              try { localStorage.removeItem("guandi_user"); } catch(e) {}
+              window.__currentUser = null;
+              if (typeof _showUserGate === "function") _showUserGate();
+            }} style={{ marginLeft: 8, background: "transparent", border: `1px solid ${C.border}`,
+              color: C.muted, padding: "0 6px", borderRadius: 3, cursor: "pointer", fontSize: 9, fontFamily: "inherit" }}>切換</button>
           </div>
         </div>
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -1575,6 +1671,29 @@ function PokerApp() {
 
       {/* Body */}
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "22px 16px" }}>
+        {/* 未結算場次提示橫條 */}
+        {(() => {
+          const unsettled = data.sessions.filter(s => !s.settled);
+          if (unsettled.length === 0) return null;
+          return (
+            <div style={{ background: C.red+"15", border: `1px solid ${C.red}55`, borderRadius: 6,
+              padding: "10px 14px", marginBottom: 14, display: "flex", justifyContent: "space-between",
+              alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 13, color: C.red, fontWeight: 600 }}>
+                📌 進行中：{unsettled.map(s => s.date).join("、")}
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {unsettled.map(s => (
+                  <button key={s.id} onClick={() => handleEdit(s.id)}
+                    style={{ background: C.red+"22", border: `1px solid ${C.red}66`, color: C.red,
+                      padding: "4px 10px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: 600 }}>
+                    繼續編輯 {s.date}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
         <div style={{ marginBottom: 16 }}>
           <SectionHeader>{TABS.find(t => t.id === tab)?.label || ""}</SectionHeader>
         </div>
