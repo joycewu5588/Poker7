@@ -45,23 +45,30 @@ function _pwCheck() {
   if (v === "168168") {
     try { sessionStorage.setItem("guandi_pw_ok", "1"); } catch(e) {}
     document.getElementById("pw-gate").style.display = "none";
-    return false;
+  } else {
+    document.getElementById("pw-err").textContent = "密碼錯誤";
+    document.getElementById("pw-input").value = "";
+    setTimeout(function(){ document.getElementById("pw-err").textContent = ""; }, 2000);
   }
-  document.getElementById("pw-err").textContent = "密碼錯誤";
-  document.getElementById("pw-input").value = "";
-  setTimeout(function(){ document.getElementById("pw-err").textContent = ""; }, 2000);
   return false;
+}
+function _pwInput() {
+  // Auto-submit when 6 digits entered
+  var v = document.getElementById("pw-input").value;
+  if (v.length >= 6) {
+    _pwCheck();
+  }
 }
 </script>
 <div id="loading"><div class="spin"></div><div>載入中...</div></div>
 <div id="pw-gate">
-  <div class="box">
+  <form class="box" onsubmit="return _pwCheck();" action="javascript:void(0)">
     <h1>🎴 官邸聚會帳務</h1>
-    <p>請輸入密碼</p>
-    <input type="password" id="pw-input" inputmode="numeric" autocomplete="off" autofocus onkeydown="if(event.key==='Enter')_pwCheck()" />
-    <button id="pw-btn" onclick="_pwCheck(); return false;" ontouchend="_pwCheck(); return false;">進入</button>
+    <p>請輸入 6 位數密碼</p>
+    <input type="password" id="pw-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" autofocus oninput="_pwInput()" />
+    <button type="submit" id="pw-btn">進入</button>
     <div class="err" id="pw-err"></div>
-  </div>
+  </form>
 </div>
 <script>
 try {
