@@ -20,7 +20,7 @@
   #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #c9a84c; font-family: 'IBM Plex Mono', monospace; font-size: 14px; flex-direction: column; gap: 12px; }
   .spin { width: 32px; height: 32px; border: 3px solid #2a3050; border-top-color: #c9a84c; border-radius: 50%; animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  #pw-gate { position: fixed; inset: 0; background: #0a0c10; z-index: 9999;
+  #pw-gate { position: fixed; inset: 0; background: #0a0c10; z-index: 99999;
     display: flex; align-items: center; justify-content: center; flex-direction: column;
     font-family: 'Noto Serif TC', serif; }
   #pw-gate .box { background: #12151e; border: 1px solid #c9a84c;
@@ -39,6 +39,7 @@
 </style>
 </head>
 <body>
+<div id="loading"><div class="spin"></div><div>載入中...</div></div>
 <div id="pw-gate">
   <div class="box">
     <h1>🎴 官邸聚會帳務</h1>
@@ -48,7 +49,6 @@
     <div class="err" id="pw-err"></div>
   </div>
 </div>
-<div id="loading" style="display:none"><div class="spin"></div><div>載入中...</div></div>
 <script>
 (function() {
   var PW = "168168";
@@ -56,8 +56,8 @@
   // Check if already authenticated this session
   try {
     if (sessionStorage.getItem(SESSION_KEY) === "1") {
-      document.getElementById("pw-gate").style.display = "none";
-      document.getElementById("loading").style.display = "flex";
+      var g = document.getElementById("pw-gate");
+      if (g) g.style.display = "none";
       return;
     }
   } catch(e) {}
@@ -70,18 +70,6 @@ function tryUnlock() {
 if (input.value === PW) {
 try { sessionStorage.setItem(SESSION_KEY, “1”); } catch(e) {}
 document.getElementById(“pw-gate”).style.display = “none”;
-document.getElementById(“loading”).style.display = “flex”;
-// Wait for React app to be ready, then start it
-var tries = 0;
-function waitAndStart() {
-if (window.__startApp) {
-window.__startApp();
-} else if (tries < 100) {
-tries++;
-setTimeout(waitAndStart, 100);
-}
-}
-waitAndStart();
 } else {
 err.textContent = “密碼錯誤”;
 input.value = “”;
@@ -1620,17 +1608,9 @@ function App() {
 }
 
 
-window.__startApp = function() {
-  document.getElementById("loading").style.display = "none";
-  const root = ReactDOM.createRoot(document.getElementById("root"));
-  root.render(React.createElement(App));
-};
-// If user already authenticated this session, start immediately
-try {
-  if (sessionStorage.getItem("guandi_pw_ok") === "1") {
-    window.__startApp();
-  }
-} catch(e) {}
+document.getElementById("loading").style.display = "none";
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(App));
 </script>
 
 </body>
