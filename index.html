@@ -89,7 +89,7 @@ function _pwInput() {
 </div>
 
 <script>
-var EDITORS = ["尚紘","Gary","Joyce","Shaan","依稀","恰吉","華導"];
+var EDITORS = ["尚紘","Gary","Joyce","Shaan","Eric","恰吉","華導"];
 
 function _renderUserButtons() {
   var c = document.getElementById("user-buttons");
@@ -420,8 +420,33 @@ function buildSettle(s, members, pairs) {
     }
 
     // Pass 2: greedy fill in pool order (non-Gary winners → Gary → splittable)
+    // Improvement: avoid splitting non-Gary winners into tiny leftovers.
+    // If taking from a non-Gary winner would leave a small leftover (< 5000),
+    // prefer to use Gary (or splittable) for the partial amount instead.
+    const SMALL_LEFTOVER = 5000;
     for (const item of poolRem) {
-      if (rem <= 0) break; if (item.rem <= 0) continue;
+      if (rem <= 0) break;
+      if (item.rem <= 0) continue;
+
+      // For non-Gary, non-splittable winners: only take if we can take ALL of rem
+      // (no leftover on item side), OR if taking ALL of item.rem will fit cleanly.
+      // Otherwise, skip and let Gary/splittable handle it.
+      if (!item.splittable && !isGary(item)) {
+        // If item.rem >= rem, take rem (item rem becomes leftover but loser is settled cleanly)
+        // If item.rem < rem, taking item.rem leaves rem - item.rem for next item
+        // We want to AVOID leaving small remainders on item side
+        if (item.rem >= rem) {
+          // Taking rem leaves (item.rem - rem) on item. If that leftover would be small AND nonzero,
+          // skip this item — let Gary absorb the full amount instead.
+          const leftoverIfTaken = item.rem - rem;
+          if (leftoverIfTaken > 0 && leftoverIfTaken < SMALL_LEFTOVER) {
+            // Check: is there a Gary or splittable item with enough remaining?
+            const fallback = poolRem.find(it => (isGary(it) || it.splittable) && it.rem >= rem);
+            if (fallback) continue; // skip — let fallback handle below
+          }
+        }
+      }
+
       const take = Math.min(rem, item.rem);
       pays.push({ toLabel: item.label, toId: item.id, toBank: item.bank, amount: take });
       item.rem -= take; rem -= take;
@@ -623,6 +648,43 @@ function TabNew({ data, setData, editingId, clearEditing }) {
   const [settled, setSettled] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // ──── 編輯中狀態追蹤（心跳機制） ────
+  // 每30秒寫一次心跳到 Firebase，其他人能看到「Joyce 正在編輯」
+  const currentUser = (typeof window !== "undefined" && window.__currentUser) || "";
+
+  useEffect(() => {
+    if (!editingId || !currentUser) return;
+
+    const markEditing = () => {
+      setData(d => {
+        const editing = Object.assign({}, d.editing || {});
+        editing[editingId] = { editor: currentUser, ts: Date.now() };
+        return Object.assign({}, d, { editing: editing });
+      });
+    };
+
+    markEditing();
+    const interval = setInterval(markEditing, 30000);
+
+    return () => {
+      clearInterval(interval);
+      setData(d => {
+        const editing = Object.assign({}, d.editing || {});
+        if (editing[editingId] && editing[editingId].editor === currentUser) {
+          delete editing[editingId];
+        }
+        return Object.assign({}, d, { editing: editing });
+      });
+    };
+  }, [editingId, currentUser]);
+
+  // 檢查是否有別人正在編輯這一場（5 分鐘內活動）
+  const otherEditor = editingId && data.editing && data.editing[editingId]
+    && data.editing[editingId].editor !== currentUser
+    && (Date.now() - data.editing[editingId].ts) < 5 * 60 * 1000
+    ? data.editing[editingId]
+    : null;
+
   // Load session for editing
   useEffect(() => {
     if (!editingId) return;
@@ -709,7 +771,11 @@ function TabNew({ data, setData, editingId, clearEditing }) {
     const newSessions = editingId
       ? data.sessions.map(s => s.id === editingId ? sessionData : s).sort((a, b) => a.date < b.date ? -1 : 1)
       : [...data.sessions, sessionData].sort((a, b) => a.date < b.date ? -1 : 1);
-    setData(d => ({ ...d, sessions: newSessions }));
+    setData(d => {
+      const editing = { ...(d.editing || {}) };
+      if (editingId && editing[editingId]) delete editing[editingId];
+      return { ...d, sessions: newSessions, editing };
+    });
     clearAll();
     setSaved(true); setTimeout(() => setSaved(false), 2500);
   };
@@ -751,6 +817,17 @@ function TabNew({ data, setData, editingId, clearEditing }) {
           </div>
         );
       })()}
+      {otherEditor && (
+        <div style={{ background: C.red+"22", border: `2px solid ${C.red}`, color: C.red,
+          padding: "12px 14px", borderRadius: 4, marginBottom: 14, fontSize: 13 }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+            ⚠️ {otherEditor.editor} 正在編輯這一場
+          </div>
+          <div style={{ fontSize: 11, fontFamily: "monospace", opacity: 0.85 }}>
+            最後活動：{Math.max(1, Math.floor((Date.now() - otherEditor.ts) / 60000))} 分鐘前　·　如果你也儲存會覆蓋對方的編輯
+          </div>
+        </div>
+      )}
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 20 }}>
 
         {/* 基本資訊 */}
