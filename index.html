@@ -387,7 +387,13 @@ function buildSettle(s, members, pairs) {
 
   const pool = [];
   winners.forEach(g => pool.push({ label: g.label, id: g.id, bank: bankOf(g.id, members), amount: g.amount, splittable: false }));
-  if (dealerTotal > 0) pool.push({ label: "Dealer", id: "小雨", bank: bankOf("小雨", members), amount: dealerTotal, splittable: false });
+  if (dealerTotal > 0) {
+    // 用實際填寫的 Dealer（小雨/芭比/...），不要寫死小雨
+    const dealerEntry = s.players.find(p => p.type === "dealer");
+    const dealerName = dealerEntry ? dealerEntry.name : "小雨";
+    const dealerId = dealerEntry ? resolveId(dealerEntry.name, members) : "小雨";
+    pool.push({ label: "Dealer " + dispName(dealerName, members), id: dealerId, bank: bankOf(dealerId, members), amount: dealerTotal, splittable: false });
+  }
   pool.push({ label: "場地", id: "場地", bank: bankOf("場地", members), amount: s.venueFee, splittable: false });
   if (res > 0) pool.push({ label: "公積金 (Joyce)", id: "Joyce", bank: bankOf("Joyce", members), amount: res, splittable: true });
 
@@ -406,50 +412,88 @@ function buildSettle(s, members, pairs) {
   const poolRem = [...nonGarySorted, ...garyItems, ...splittable].map(p => ({ ...p, rem: p.amount }));
 
   const paymentMap = {};
-  for (const loser of negPool) {
-    let rem = loser.amount; const pays = [];
 
-    // Pass 1: try to find a single non-Gary, non-splittable item that exactly matches the loser amount.
-    // This minimizes transfer count for both sides.
-    if (rem > 0) {
-      const exactItem = poolRem.find(it => !it.splittable && !isGary(it) && it.rem === rem);
-      if (exactItem) {
-        pays.push({ toLabel: exactItem.label, toId: exactItem.id, toBank: exactItem.bank, amount: rem });
-        exactItem.rem = 0; rem = 0;
+  // 找「2-3 個非可拆贏家組合 = 某個輸家欠款」的整數配對
+  // 回傳 {items: [item1, item2, ...]} 或 null
+  // 只用 non-Gary、non-splittable 的贏家（華導、Dealer、場地 等）
+  // 因為這些只能整筆收
+  function findExactCombo(targetAmt, pool) {
+    const candidates = pool.filter(it => !it.splittable && !isGary(it) && it.rem > 0);
+    // 試 1 個
+    for (const a of candidates) {
+      if (a.rem === targetAmt) return { items: [a] };
+    }
+    // 試 2 個
+    for (let i = 0; i < candidates.length; i++) {
+      for (let j = i + 1; j < candidates.length; j++) {
+        if (candidates[i].rem + candidates[j].rem === targetAmt) {
+          return { items: [candidates[i], candidates[j]] };
+        }
       }
     }
+    // 試 3 個
+    for (let i = 0; i < candidates.length; i++) {
+      for (let j = i + 1; j < candidates.length; j++) {
+        for (let k = j + 1; k < candidates.length; k++) {
+          if (candidates[i].rem + candidates[j].rem + candidates[k].rem === targetAmt) {
+            return { items: [candidates[i], candidates[j], candidates[k]] };
+          }
+        }
+      }
+    }
+    return null;
+  }
 
-    // Pass 2: greedy fill in pool order (non-Gary winners → Gary → splittable)
-    // Improvement: avoid splitting non-Gary winners into tiny leftovers.
-    // If taking from a non-Gary winner would leave a small leftover (< 5000),
-    // prefer to use Gary (or splittable) for the partial amount instead.
-    const SMALL_LEFTOVER = 5000;
+  // 依輸家欠款由大到小排序（已 sort 過）
+  // Pass A: 對每個輸家找「組合配對」(1-3 個非可拆贏家整數對應)
+  // 找到就鎖定，這些贏家被「整筆」用掉
+  for (const loser of negPool) {
+    const combo = findExactCombo(loser.amount, poolRem);
+    if (!combo) continue;
+
+    const pays = [];
+    let rem = loser.amount;
+    for (const item of combo.items) {
+      pays.push({ toLabel: item.label, toId: item.id, toBank: item.bank, amount: item.rem });
+      rem -= item.rem;
+      item.rem = 0;
+    }
+    paymentMap[loser.id + "||" + loser.label] = { loserLabel: loser.label, loserId: loser.id, total: loser.amount, pays };
+    loser._done = true; // 標記已完成
+  }
+
+  // Pass B: 剩下輸家用貪婪法 + Gary/公積金 吸收零頭
+  const SMALL_LEFTOVER = 5000;
+  for (const loser of negPool) {
+    if (loser._done) continue;
+    let rem = loser.amount;
+    const pays = [];
+
     for (const item of poolRem) {
       if (rem <= 0) break;
       if (item.rem <= 0) continue;
 
-      // For non-Gary, non-splittable winners: only take if we can take ALL of rem
-      // (no leftover on item side), OR if taking ALL of item.rem will fit cleanly.
-      // Otherwise, skip and let Gary/splittable handle it.
+      // 非可拆贏家：避免留下小零頭。如果取了會留小零頭，跳過讓 Gary/公積金 吸收
       if (!item.splittable && !isGary(item)) {
-        // If item.rem >= rem, take rem (item rem becomes leftover but loser is settled cleanly)
-        // If item.rem < rem, taking item.rem leaves rem - item.rem for next item
-        // We want to AVOID leaving small remainders on item side
         if (item.rem >= rem) {
-          // Taking rem leaves (item.rem - rem) on item. If that leftover would be small AND nonzero,
-          // skip this item — let Gary absorb the full amount instead.
           const leftoverIfTaken = item.rem - rem;
           if (leftoverIfTaken > 0 && leftoverIfTaken < SMALL_LEFTOVER) {
-            // Check: is there a Gary or splittable item with enough remaining?
             const fallback = poolRem.find(it => (isGary(it) || it.splittable) && it.rem >= rem);
-            if (fallback) continue; // skip — let fallback handle below
+            if (fallback) continue;
           }
+        }
+        // 如果只能拿一部分(item.rem < rem)，這樣會把非可拆贏家拆掉，避免：
+        // 跳過，讓後面 Gary/公積金 處理整筆
+        if (item.rem < rem) {
+          const fallback = poolRem.find(it => (isGary(it) || it.splittable) && it.rem >= rem);
+          if (fallback) continue;
         }
       }
 
       const take = Math.min(rem, item.rem);
       pays.push({ toLabel: item.label, toId: item.id, toBank: item.bank, amount: take });
-      item.rem -= take; rem -= take;
+      item.rem -= take;
+      rem -= take;
     }
     paymentMap[loser.id + "||" + loser.label] = { loserLabel: loser.label, loserId: loser.id, total: loser.amount, pays };
   }
