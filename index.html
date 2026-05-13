@@ -1049,15 +1049,33 @@ function TabNew({ data, setData, editingId, clearEditing }) {
 // ═══════════════════════════════════════════════════════
 // TAB: SETTLEMENT
 // ═══════════════════════════════════════════════════════
-function TabSettle({ data }) {
+function TabSettle({ data, setData }) {
+  const dialog = useDialog();
   const { sessions, members } = data;
   const [selId, setSelId] = useState("");
   const [pairs, setPairs] = useState([]); // [[id1,id2],...]
   const [newPair, setNewPair] = useState(["", ""]);
   const [copied, setCopied] = useState("");
+  const [editMode, setEditMode] = useState(false);
+  const [editedMap, setEditedMap] = useState(null); // { loserKey: { ...entry, pays: [...] } }
+  const [saveMsg, setSaveMsg] = useState("");
 
   const s = sessions.find(x => x.id === selId);
-  const { pool, paymentMap, res, dealerTotal } = s ? buildSettle(s, members, pairs) : { pool: [], paymentMap: {}, res: 0, dealerTotal: 0 };
+  const autoResult = s ? buildSettle(s, members, pairs) : { pool: [], paymentMap: {}, res: 0, dealerTotal: 0 };
+  const { pool, res, dealerTotal } = autoResult;
+
+  // Decide what paymentMap to show: custom saved → custom; in edit mode → edited; else → auto
+  const customMap = s && s.customSettlement && s.customSettlement.paymentMap ? s.customSettlement.paymentMap : null;
+  const displayMap = editMode && editedMap
+    ? editedMap
+    : (customMap || autoResult.paymentMap);
+
+  // Reset edit state when switching sessions
+  useEffect(() => {
+    setEditMode(false);
+    setEditedMap(null);
+    setSaveMsg("");
+  }, [selId]);
 
   const sessionPlayers = s ? [...new Set(s.players.filter(p => p.type !== "dealer").map(p => resolveId(p.name, members)))] : [];
 
@@ -1073,74 +1091,209 @@ function TabSettle({ data }) {
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setCopied(entry.loserLabel); setTimeout(() => setCopied(""), 2000); });
   };
 
+  const startEdit = () => {
+    // Deep copy current displayed map for editing
+    const copy = {};
+    Object.entries(displayMap).forEach(([key, entry]) => {
+      copy[key] = Object.assign({}, entry, { pays: entry.pays.map(p => Object.assign({}, p)) });
+    });
+    setEditedMap(copy);
+    setEditMode(true);
+  };
+
+  const cancelEdit = () => {
+    setEditMode(false);
+    setEditedMap(null);
+  };
+
+  const updatePayAmount = (loserKey, payIdx, newAmount) => {
+    setEditedMap(m => {
+      const next = Object.assign({}, m);
+      const entry = Object.assign({}, next[loserKey]);
+      entry.pays = entry.pays.map((p, i) => i === payIdx ? Object.assign({}, p, { amount: parseInt(newAmount) || 0 }) : p);
+      next[loserKey] = entry;
+      return next;
+    });
+  };
+
+  const saveCustom = async () => {
+    // Validate: each loser's pays total must equal their loser.total
+    const errors = [];
+    Object.values(editedMap).forEach(entry => {
+      const sum = entry.pays.reduce((a, p) => a + (parseInt(p.amount) || 0), 0);
+      if (sum !== entry.total) {
+        errors.push(`${entry.loserLabel}：總額應為 ${entry.total}，目前為 ${sum}（差 ${entry.total - sum}）`);
+      }
+    });
+    if (errors.length > 0) {
+      await dialog.alert("以下輸家的轉帳總額不正確：\n\n" + errors.join("\n"));
+      return;
+    }
+    // Save into session
+    const editor = (typeof window !== "undefined" && window.__currentUser) || "";
+    setData(d => {
+      const newSessions = d.sessions.map(sess => {
+        if (sess.id !== selId) return sess;
+        return Object.assign({}, sess, {
+          customSettlement: {
+            paymentMap: editedMap,
+            editor: editor,
+            editTs: Date.now(),
+            pairs: pairs,
+          }
+        });
+      });
+      return Object.assign({}, d, { sessions: newSessions });
+    });
+    setEditMode(false);
+    setSaveMsg("✅ 已儲存");
+    setTimeout(() => setSaveMsg(""), 2500);
+  };
+
+  const resetToAuto = async () => {
+    if (!(await dialog.confirm("確定要清除手動結算，回到自動計算結果？"))) return;
+    setData(d => {
+      const newSessions = d.sessions.map(sess => {
+        if (sess.id !== selId) return sess;
+        const cp = Object.assign({}, sess);
+        delete cp.customSettlement;
+        return cp;
+      });
+      return Object.assign({}, d, { sessions: newSessions });
+    });
+    setEditMode(false);
+    setEditedMap(null);
+    setSaveMsg("🔄 已回到自動計算");
+    setTimeout(() => setSaveMsg(""), 2500);
+  };
+
+  const customEditTimeStr = customMap && s.customSettlement.editTs
+    ? new Date(s.customSettlement.editTs).toLocaleString("zh-TW", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})
+    : "";
+
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
         <select value={selId} onChange={e => { setSelId(e.target.value); setPairs([]); }}
           style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text, padding: "7px 12px", borderRadius: 4, fontSize: 13, outline: "none", maxWidth: 260 }}>
           <option value="">-- 選擇場次 --</option>
-          {[...sessions].reverse().map(s => <option key={s.id} value={s.id}>{s.date} ({s.hours}hr)</option>)}
+          {[...sessions].reverse().map(s => <option key={s.id} value={s.id}>{s.date} ({s.hours}hr){s.customSettlement ? " ✏️" : ""}</option>)}
         </select>
       </div>
 
       {s && <>
-        {/* Pairing UI */}
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, marginBottom: 16, maxWidth: 500 }}>
-          <SectionHeader>共算配對（選填）</SectionHeader>
-          {pairs.map((pair, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: 13 }}>
-              <span style={{ background: C.surface2, border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 4, color: C.text }}>
-                {pair.map(id => members.find(m => m.id === id)?.name || id).join(" + ")}
-              </span>
-              <button onClick={() => setPairs(ps => ps.filter((_, j) => j !== i))}
-                style={{ background: "transparent", border: "none", color: C.red, cursor: "pointer", fontSize: 13 }}>✕</button>
+        {/* 手動結算狀態提示 */}
+        {customMap && !editMode && (
+          <div style={{ background: C.gold+"15", border: `1px solid ${C.gold}55`, borderRadius: 6,
+            padding: "10px 14px", marginBottom: 14, display: "flex", justifyContent: "space-between",
+            alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 12, color: C.goldLight }}>
+              ✏️ 此結算已由 <b>{s.customSettlement.editor || "?"}</b> 手動調整
+              {customEditTimeStr && <span style={{ color: C.dim, marginLeft: 6 }}>· {customEditTimeStr}</span>}
             </div>
-          ))}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <select value={newPair[0]} onChange={e => setNewPair(p => [e.target.value, p[1]])}
-              style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text, padding: "6px 9px", borderRadius: 4, fontSize: 12, outline: "none" }}>
-              <option value="">玩家 A</option>
-              {sessionPlayers.map(id => <option key={id} value={id}>{members.find(m => m.id === id)?.name || id}</option>)}
-            </select>
-            <span style={{ color: C.dim }}>＋</span>
-            <select value={newPair[1]} onChange={e => setNewPair(p => [p[0], e.target.value])}
-              style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text, padding: "6px 9px", borderRadius: 4, fontSize: 12, outline: "none" }}>
-              <option value="">玩家 B</option>
-              {sessionPlayers.map(id => <option key={id} value={id}>{members.find(m => m.id === id)?.name || id}</option>)}
-            </select>
-            <Btn variant="dark" onClick={() => {
-              if (newPair[0] && newPair[1] && newPair[0] !== newPair[1]) {
-                setPairs(ps => [...ps, newPair]); setNewPair(["", ""]);
-              }
-            }} style={{ fontSize: 12, padding: "6px 12px" }}>加入配對</Btn>
+            <button onClick={resetToAuto}
+              style={{ background: "transparent", border: `1px solid ${C.gold}66`, color: C.goldLight,
+                padding: "3px 10px", borderRadius: 3, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>🔄 重新計算</button>
           </div>
+        )}
+
+        {/* Pairing UI - 編輯模式下隱藏 */}
+        {!editMode && (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, marginBottom: 16, maxWidth: 500 }}>
+            <SectionHeader>共算配對（選填）</SectionHeader>
+            {pairs.map((pair, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: 13 }}>
+                <span style={{ background: C.surface2, border: `1px solid ${C.border}`, padding: "4px 10px", borderRadius: 4, color: C.text }}>
+                  {pair.map(id => members.find(m => m.id === id)?.name || id).join(" + ")}
+                </span>
+                <button onClick={() => setPairs(ps => ps.filter((_, j) => j !== i))}
+                  style={{ background: "transparent", border: "none", color: C.red, cursor: "pointer", fontSize: 13 }}>✕</button>
+              </div>
+            ))}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <select value={newPair[0]} onChange={e => setNewPair(p => [e.target.value, p[1]])}
+                style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text, padding: "6px 9px", borderRadius: 4, fontSize: 12, outline: "none" }}>
+                <option value="">玩家 A</option>
+                {sessionPlayers.map(id => <option key={id} value={id}>{members.find(m => m.id === id)?.name || id}</option>)}
+              </select>
+              <span style={{ color: C.dim }}>＋</span>
+              <select value={newPair[1]} onChange={e => setNewPair(p => [p[0], e.target.value])}
+                style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text, padding: "6px 9px", borderRadius: 4, fontSize: 12, outline: "none" }}>
+                <option value="">玩家 B</option>
+                {sessionPlayers.map(id => <option key={id} value={id}>{members.find(m => m.id === id)?.name || id}</option>)}
+              </select>
+              <Btn variant="dark" onClick={() => {
+                if (newPair[0] && newPair[1] && newPair[0] !== newPair[1]) {
+                  setPairs(ps => [...ps, newPair]); setNewPair(["", ""]);
+                }
+              }} style={{ fontSize: 12, padding: "6px 12px" }}>加入配對</Btn>
+            </div>
+          </div>
+        )}
+
+        {/* 手動編輯按鈕列 */}
+        <div style={{ marginBottom: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {!editMode ? (
+            <Btn variant="secondary" onClick={startEdit} style={{ fontSize: 12, padding: "6px 14px" }}>
+              ✏️ 手動調整轉帳金額
+            </Btn>
+          ) : (
+            <>
+              <Btn onClick={saveCustom} style={{ fontSize: 12, padding: "6px 14px" }}>💾 儲存此結算</Btn>
+              <Btn variant="secondary" onClick={cancelEdit} style={{ fontSize: 12, padding: "6px 14px" }}>取消</Btn>
+              <span style={{ color: C.dim, fontSize: 11, fontFamily: "monospace" }}>
+                只能改金額（不能新增/刪除人）· 每筆總額必須等於輸家欠款
+              </span>
+            </>
+          )}
+          {saveMsg && <span style={{ color: C.green, fontSize: 12 }}>{saveMsg}</span>}
         </div>
 
         {/* Settlement grid */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
           <div>
-            {Object.values(paymentMap).map(entry => (
-              <div key={entry.loserId + entry.loserLabel} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
-                <div style={{ padding: "8px 12px", background: "#e0555511", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ color: C.red, fontWeight: 700, fontSize: 14 }}>▼ {entry.loserLabel}</span>
-                  <span style={{ fontFamily: "monospace", color: C.red, fontWeight: 700, fontSize: 13 }}>須付 {fmtAbs(entry.total)}</span>
-                </div>
-                {entry.pays.map((p, i) => (
-                  <div key={i} style={{ padding: "6px 12px", borderBottom: `1px solid ${C.border}33`, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
-                    <div>
-                      <div style={{ color: C.text }}>{p.toLabel}</div>
-                      {p.toBank && <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim }}>{p.toBank}</div>}
-                    </div>
-                    <span style={{ fontFamily: "monospace", color: C.green, fontWeight: 700 }}>+{fmtAbs(p.amount)}</span>
+            {Object.entries(displayMap).map(([key, entry]) => {
+              const currentSum = entry.pays.reduce((a, p) => a + (parseInt(p.amount) || 0), 0);
+              const diff = entry.total - currentSum;
+              return (
+                <div key={key} style={{ background: C.surface2, border: `1px solid ${editMode && diff !== 0 ? C.red : C.border}`, borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
+                  <div style={{ padding: "8px 12px", background: "#e0555511", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ color: C.red, fontWeight: 700, fontSize: 14 }}>▼ {entry.loserLabel}</span>
+                    <span style={{ fontFamily: "monospace", color: C.red, fontWeight: 700, fontSize: 13 }}>須付 {fmtAbs(entry.total)}</span>
                   </div>
-                ))}
-                <div style={{ padding: "5px 10px 8px", textAlign: "right" }}>
-                  <Btn variant="secondary" onClick={() => copyBill(entry)} style={{ fontSize: 11, padding: "4px 10px" }}>
-                    {copied === entry.loserLabel ? "✅ 已複製" : "📋 複製帳單"}
-                  </Btn>
+                  {entry.pays.map((p, i) => (
+                    <div key={i} style={{ padding: "6px 12px", borderBottom: `1px solid ${C.border}33`, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, gap: 8 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ color: C.text }}>{p.toLabel}</div>
+                        {p.toBank && <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim, overflow: "hidden", textOverflow: "ellipsis" }}>{p.toBank}</div>}
+                      </div>
+                      {editMode ? (
+                        <input type="number" value={p.amount} onChange={e => updatePayAmount(key, i, e.target.value)}
+                          style={{ width: 90, background: C.surface, border: `1px solid ${C.gold}66`, color: C.green,
+                            padding: "4px 8px", borderRadius: 3, fontFamily: "monospace", fontWeight: 700, fontSize: 13, textAlign: "right", outline: "none" }} />
+                      ) : (
+                        <span style={{ fontFamily: "monospace", color: C.green, fontWeight: 700 }}>+{fmtAbs(p.amount)}</span>
+                      )}
+                    </div>
+                  ))}
+                  {editMode && (
+                    <div style={{ padding: "6px 12px", background: diff === 0 ? C.green+"15" : C.red+"15", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, fontFamily: "monospace" }}>
+                      <span style={{ color: C.dim }}>目前總額：{currentSum}</span>
+                      <span style={{ color: diff === 0 ? C.green : C.red, fontWeight: 700 }}>
+                        {diff === 0 ? "✓ 平衡" : `差 ${diff > 0 ? "+" : ""}${diff}`}
+                      </span>
+                    </div>
+                  )}
+                  {!editMode && (
+                    <div style={{ padding: "5px 10px 8px", textAlign: "right" }}>
+                      <Btn variant="secondary" onClick={() => copyBill(entry)} style={{ fontSize: 11, padding: "4px 10px" }}>
+                        {copied === entry.loserLabel ? "✅ 已複製" : "📋 複製帳單"}
+                      </Btn>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16 }}>
             <SectionHeader>本場收款方</SectionHeader>
@@ -1849,7 +2002,7 @@ function PokerApp() {
         </div>
         {tab === "records"  && <TabRecords  data={data} setData={setData} onEdit={handleEdit} />}
         {tab === "new"      && <TabNew      data={data} setData={setData} editingId={editingId} clearEditing={() => setEditingId(null)} />}
-        {tab === "settle"   && <TabSettle   data={data} />}
+        {tab === "settle"   && <TabSettle   data={data} setData={setData} />}
         {tab === "cumul"    && <TabCumul    data={data} />}
         {tab === "reserve"  && <TabReserve  data={data} setData={setData} />}
         {tab === "bonus"    && <TabBonus    data={data} />}
