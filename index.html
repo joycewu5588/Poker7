@@ -413,56 +413,74 @@ function buildSettle(s, members, pairs) {
 
   const paymentMap = {};
 
-  // 找「2-3 個非可拆贏家組合 = 某個輸家欠款」的整數配對
-  // 回傳 {items: [item1, item2, ...]} 或 null
-  // 只用 non-Gary、non-splittable 的贏家（華導、Dealer、場地 等）
-  // 因為這些只能整筆收
-  function findExactCombo(targetAmt, pool) {
+  // ──────────────────────────────────────────────
+  // 子集合配對：用 bit-mask 嘗試所有非可拆贏家的子集合
+  // 找出總和 = 輸家欠款 的最佳組合
+  // 偏好：贏家數量越多越好（一次清理越多贏家）
+  // ──────────────────────────────────────────────
+  function findBestCombo(targetAmt, pool) {
     const candidates = pool.filter(it => !it.splittable && !isGary(it) && it.rem > 0);
-    // 試 1 個
-    for (const a of candidates) {
-      if (a.rem === targetAmt) return { items: [a] };
+    if (candidates.length === 0) return null;
+    if (candidates.length > 18) {
+      // 太多就退回 3 個的搜尋，避免太慢
+      for (const a of candidates) if (a.rem === targetAmt) return { items: [a], count: 1 };
+      for (let i = 0; i < candidates.length; i++)
+        for (let j = i + 1; j < candidates.length; j++)
+          if (candidates[i].rem + candidates[j].rem === targetAmt)
+            return { items: [candidates[i], candidates[j]], count: 2 };
+      for (let i = 0; i < candidates.length; i++)
+        for (let j = i + 1; j < candidates.length; j++)
+          for (let k = j + 1; k < candidates.length; k++)
+            if (candidates[i].rem + candidates[j].rem + candidates[k].rem === targetAmt)
+              return { items: [candidates[i], candidates[j], candidates[k]], count: 3 };
+      return null;
     }
-    // 試 2 個
-    for (let i = 0; i < candidates.length; i++) {
-      for (let j = i + 1; j < candidates.length; j++) {
-        if (candidates[i].rem + candidates[j].rem === targetAmt) {
-          return { items: [candidates[i], candidates[j]] };
-        }
+
+    let best = null;
+    const N = candidates.length;
+    for (let mask = 1; mask < (1 << N); mask++) {
+      let sum = 0, count = 0;
+      for (let i = 0; i < N; i++) {
+        if (mask & (1 << i)) { sum += candidates[i].rem; count++; if (sum > targetAmt) break; }
+      }
+      if (sum !== targetAmt) continue;
+      if (!best || count > best.count) {
+        const items = [];
+        for (let i = 0; i < N; i++) if (mask & (1 << i)) items.push(candidates[i]);
+        best = { items: items, count: count };
       }
     }
-    // 試 3 個
-    for (let i = 0; i < candidates.length; i++) {
-      for (let j = i + 1; j < candidates.length; j++) {
-        for (let k = j + 1; k < candidates.length; k++) {
-          if (candidates[i].rem + candidates[j].rem + candidates[k].rem === targetAmt) {
-            return { items: [candidates[i], candidates[j], candidates[k]] };
-          }
-        }
-      }
-    }
-    return null;
+    return best;
   }
 
-  // 依輸家欠款由大到小排序（已 sort 過）
-  // Pass A: 對每個輸家找「組合配對」(1-3 個非可拆贏家整數對應)
-  // 找到就鎖定，這些贏家被「整筆」用掉
-  for (const loser of negPool) {
-    const combo = findExactCombo(loser.amount, poolRem);
-    if (!combo) continue;
-
+  // ──────────────────────────────────────────────
+  // Pass A：迭代式找最佳配對。
+  // 每輪掃所有未完成輸家，挑「能配最多贏家」的那組先固定，
+  // 然後重新計算剩下的可能性。
+  // ──────────────────────────────────────────────
+  while (true) {
+    let bestPair = null;
+    for (const loser of negPool) {
+      if (loser._done) continue;
+      const combo = findBestCombo(loser.amount, poolRem);
+      if (!combo) continue;
+      if (!bestPair || combo.count > bestPair.combo.count) {
+        bestPair = { loser: loser, combo: combo };
+      }
+    }
+    if (!bestPair) break;
     const pays = [];
-    let rem = loser.amount;
-    for (const item of combo.items) {
+    for (const item of bestPair.combo.items) {
       pays.push({ toLabel: item.label, toId: item.id, toBank: item.bank, amount: item.rem });
-      rem -= item.rem;
       item.rem = 0;
     }
-    paymentMap[loser.id + "||" + loser.label] = { loserLabel: loser.label, loserId: loser.id, total: loser.amount, pays };
-    loser._done = true; // 標記已完成
+    paymentMap[bestPair.loser.id + "||" + bestPair.loser.label] = { loserLabel: bestPair.loser.label, loserId: bestPair.loser.id, total: bestPair.loser.amount, pays };
+    bestPair.loser._done = true;
   }
 
-  // Pass B: 剩下輸家用貪婪法 + Gary/公積金 吸收零頭
+  // ──────────────────────────────────────────────
+  // Pass B：剩下輸家用貪婪法 + Gary/公積金 吸收零頭
+  // ──────────────────────────────────────────────
   const SMALL_LEFTOVER = 5000;
   for (const loser of negPool) {
     if (loser._done) continue;
@@ -473,7 +491,6 @@ function buildSettle(s, members, pairs) {
       if (rem <= 0) break;
       if (item.rem <= 0) continue;
 
-      // 非可拆贏家：避免留下小零頭。如果取了會留小零頭，跳過讓 Gary/公積金 吸收
       if (!item.splittable && !isGary(item)) {
         if (item.rem >= rem) {
           const leftoverIfTaken = item.rem - rem;
@@ -482,8 +499,6 @@ function buildSettle(s, members, pairs) {
             if (fallback) continue;
           }
         }
-        // 如果只能拿一部分(item.rem < rem)，這樣會把非可拆贏家拆掉，避免：
-        // 跳過，讓後面 Gary/公積金 處理整筆
         if (item.rem < rem) {
           const fallback = poolRem.find(it => (isGary(it) || it.splittable) && it.rem >= rem);
           if (fallback) continue;
