@@ -1116,19 +1116,79 @@ function TabSettle({ data, setData }) {
     });
   };
 
+  // 新增一筆轉帳到某輸家
+  const addPay = (loserKey, toId) => {
+    if (!toId) return;
+    const poolItem = pool.find(p => p.id === toId);
+    if (!poolItem) return;
+    setEditedMap(m => {
+      const next = Object.assign({}, m);
+      const entry = Object.assign({}, next[loserKey]);
+      // 已經存在則不重複加
+      if (entry.pays.some(p => p.toId === toId)) return m;
+      entry.pays = [...entry.pays, { toLabel: poolItem.label, toId: poolItem.id, toBank: poolItem.bank, amount: 0 }];
+      next[loserKey] = entry;
+      return next;
+    });
+  };
+
+  // 刪除某筆轉帳
+  const removePay = (loserKey, payIdx) => {
+    setEditedMap(m => {
+      const next = Object.assign({}, m);
+      const entry = Object.assign({}, next[loserKey]);
+      entry.pays = entry.pays.filter((_, i) => i !== payIdx);
+      next[loserKey] = entry;
+      return next;
+    });
+  };
+
   const saveCustom = async () => {
-    // Validate: each loser's pays total must equal their loser.total
-    const errors = [];
+    // 驗證1：每個輸家的 pays 總額 = 該輸家欠款
+    const loserErrors = [];
     Object.values(editedMap).forEach(entry => {
       const sum = entry.pays.reduce((a, p) => a + (parseInt(p.amount) || 0), 0);
       if (sum !== entry.total) {
-        errors.push(`${entry.loserLabel}：總額應為 ${entry.total}，目前為 ${sum}（差 ${entry.total - sum}）`);
+        loserErrors.push(`輸家 ${entry.loserLabel}：應付 ${entry.total}，目前 ${sum}（差 ${entry.total - sum}）`);
       }
     });
-    if (errors.length > 0) {
-      await dialog.alert("以下輸家的轉帳總額不正確：\n\n" + errors.join("\n"));
+
+    // 驗證2：每個贏家收到總額 = 該贏家應得（從 pool）
+    // 統計所有 pays 中每個 toId 的總收款
+    const winnerReceived = {};
+    Object.values(editedMap).forEach(entry => {
+      entry.pays.forEach(p => {
+        const amt = parseInt(p.amount) || 0;
+        if (!winnerReceived[p.toId]) winnerReceived[p.toId] = { label: p.toLabel, sum: 0 };
+        winnerReceived[p.toId].sum += amt;
+      });
+    });
+    const winnerErrors = [];
+    pool.forEach(p => {
+      const recv = winnerReceived[p.id] ? winnerReceived[p.id].sum : 0;
+      if (recv !== p.amount) {
+        winnerErrors.push(`贏家 ${p.label}：應收 ${p.amount}，目前 ${recv}（差 ${p.amount - recv}）`);
+      }
+    });
+    // 也檢查公積金補差（res < 0 時是輸家）— 已含在 editedMap 裡
+    // 但要檢查 winnerReceived 中沒有不該收的人
+    Object.entries(winnerReceived).forEach(([id, info]) => {
+      const poolMatch = pool.find(p => p.id === id);
+      if (!poolMatch) {
+        // 可能是公積金補差(res < 0)，這是負池子，跳過
+        if (id === "Joyce" && res < 0) return;
+        winnerErrors.push(`贏家 ${info.label}：不在本場收款方名單`);
+      }
+    });
+
+    if (loserErrors.length + winnerErrors.length > 0) {
+      const msg = [];
+      if (loserErrors.length) msg.push("【輸家端】\n" + loserErrors.join("\n"));
+      if (winnerErrors.length) msg.push("【贏家端】\n" + winnerErrors.join("\n"));
+      await dialog.alert("數字不平衡，無法儲存：\n\n" + msg.join("\n\n"));
       return;
     }
+
     // Save into session
     const editor = (typeof window !== "undefined" && window.__currentUser) || "";
     setData(d => {
@@ -1235,14 +1295,14 @@ function TabSettle({ data, setData }) {
         <div style={{ marginBottom: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {!editMode ? (
             <Btn variant="secondary" onClick={startEdit} style={{ fontSize: 12, padding: "6px 14px" }}>
-              ✏️ 手動調整轉帳金額
+              ✏️ 手動調整轉帳
             </Btn>
           ) : (
             <>
               <Btn onClick={saveCustom} style={{ fontSize: 12, padding: "6px 14px" }}>💾 儲存此結算</Btn>
               <Btn variant="secondary" onClick={cancelEdit} style={{ fontSize: 12, padding: "6px 14px" }}>取消</Btn>
               <span style={{ color: C.dim, fontSize: 11, fontFamily: "monospace" }}>
-                只能改金額（不能新增/刪除人）· 每筆總額必須等於輸家欠款
+                可改金額、新增/刪除收款人 · 輸家總額與每位贏家應收都必須對得上才能存
               </span>
             </>
           )}
@@ -1255,6 +1315,8 @@ function TabSettle({ data, setData }) {
             {Object.entries(displayMap).map(([key, entry]) => {
               const currentSum = entry.pays.reduce((a, p) => a + (parseInt(p.amount) || 0), 0);
               const diff = entry.total - currentSum;
+              // 收款人下拉：列出所有 pool 中尚未在此 entry 的人
+              const availableToAdd = pool.filter(p => !entry.pays.some(pay => pay.toId === p.id));
               return (
                 <div key={key} style={{ background: C.surface2, border: `1px solid ${editMode && diff !== 0 ? C.red : C.border}`, borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
                   <div style={{ padding: "8px 12px", background: "#e0555511", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1268,14 +1330,32 @@ function TabSettle({ data, setData }) {
                         {p.toBank && <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim, overflow: "hidden", textOverflow: "ellipsis" }}>{p.toBank}</div>}
                       </div>
                       {editMode ? (
-                        <input type="number" value={p.amount} onChange={e => updatePayAmount(key, i, e.target.value)}
-                          style={{ width: 90, background: C.surface, border: `1px solid ${C.gold}66`, color: C.green,
-                            padding: "4px 8px", borderRadius: 3, fontFamily: "monospace", fontWeight: 700, fontSize: 13, textAlign: "right", outline: "none" }} />
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input type="number" value={p.amount} onChange={e => updatePayAmount(key, i, e.target.value)}
+                            style={{ width: 90, background: C.surface, border: `1px solid ${C.gold}66`, color: C.green,
+                              padding: "4px 8px", borderRadius: 3, fontFamily: "monospace", fontWeight: 700, fontSize: 13, textAlign: "right", outline: "none" }} />
+                          <button onClick={() => removePay(key, i)} title="刪除"
+                            style={{ background: "transparent", border: `1px solid ${C.red}66`, color: C.red,
+                              padding: "2px 7px", borderRadius: 3, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>✕</button>
+                        </div>
                       ) : (
                         <span style={{ fontFamily: "monospace", color: C.green, fontWeight: 700 }}>+{fmtAbs(p.amount)}</span>
                       )}
                     </div>
                   ))}
+                  {editMode && availableToAdd.length > 0 && (
+                    <div style={{ padding: "6px 12px", borderBottom: `1px solid ${C.border}33`, display: "flex", gap: 6, alignItems: "center" }}>
+                      <select onChange={e => { if (e.target.value) { addPay(key, e.target.value); e.target.value = ""; } }}
+                        defaultValue=""
+                        style={{ flex: 1, background: C.surface, border: `1px solid ${C.gold}55`, color: C.goldLight,
+                          padding: "4px 8px", borderRadius: 3, fontSize: 12, fontFamily: "inherit", outline: "none" }}>
+                        <option value="">＋ 新增收款人</option>
+                        {availableToAdd.map(p => (
+                          <option key={p.id} value={p.id}>{p.label}（應收 {fmtAbs(p.amount)}）</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   {editMode && (
                     <div style={{ padding: "6px 12px", background: diff === 0 ? C.green+"15" : C.red+"15", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, fontFamily: "monospace" }}>
                       <span style={{ color: C.dim }}>目前總額：{currentSum}</span>
@@ -1297,15 +1377,31 @@ function TabSettle({ data, setData }) {
           </div>
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16 }}>
             <SectionHeader>本場收款方</SectionHeader>
-            {pool.map((p, i) => (
-              <div key={i} style={{ marginBottom: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, fontSize: 13 }}>
-                  <span>{p.label}{p.splittable && <span style={{ fontSize: 10, color: C.dim, marginLeft: 4 }}>(可拆)</span>}</span>
-                  <span style={{ fontFamily: "monospace", color: C.green }}>+{fmtAbs(p.amount)}</span>
+            {pool.map((p, i) => {
+              // 計算此贏家在編輯中實際收到的總額
+              let received = 0;
+              Object.values(displayMap).forEach(entry => {
+                entry.pays.forEach(pay => {
+                  if (pay.toId === p.id) received += (parseInt(pay.amount) || 0);
+                });
+              });
+              const winnerDiff = p.amount - received;
+              return (
+                <div key={i} style={{ marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, fontSize: 13 }}>
+                    <span>{p.label}{p.splittable && <span style={{ fontSize: 10, color: C.dim, marginLeft: 4 }}>(可拆)</span>}</span>
+                    <span style={{ fontFamily: "monospace", color: C.green }}>+{fmtAbs(p.amount)}</span>
+                  </div>
+                  {p.bank && <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim }}>{p.bank}</div>}
+                  {editMode && (
+                    <div style={{ fontSize: 10, fontFamily: "monospace", marginTop: 2,
+                      color: winnerDiff === 0 ? C.green : C.red }}>
+                      {winnerDiff === 0 ? `✓ 已收齊 ${received}` : `目前 ${received}，差 ${winnerDiff > 0 ? "+" : ""}${winnerDiff}`}
+                    </div>
+                  )}
                 </div>
-                {p.bank && <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim }}>{p.bank}</div>}
-              </div>
-            ))}
+              );
+            })}
             <Divider />
             <FR label="水錢餘 → Joyce（公積金）" value={fmt(res)} valueColor={res >= 0 ? C.gold : C.red} />
             <FR label="Dealer（薪+小費）" value={fmt(dealerTotal)} valueColor={dealerTotal >= 0 ? C.green : C.red} />
