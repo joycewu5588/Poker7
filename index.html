@@ -1107,10 +1107,12 @@ function TabSettle({ data, setData }) {
   };
 
   const updatePayAmount = (loserKey, payIdx, newAmount) => {
+    // 允許空字串（讓使用者可以清空輸入框），只接受數字
+    const clean = newAmount === "" ? "" : (newAmount.replace(/[^0-9]/g, ""));
     setEditedMap(m => {
       const next = Object.assign({}, m);
       const entry = Object.assign({}, next[loserKey]);
-      entry.pays = entry.pays.map((p, i) => i === payIdx ? Object.assign({}, p, { amount: parseInt(newAmount) || 0 }) : p);
+      entry.pays = entry.pays.map((p, i) => i === payIdx ? Object.assign({}, p, { amount: clean }) : p);
       next[loserKey] = entry;
       return next;
     });
@@ -1126,7 +1128,7 @@ function TabSettle({ data, setData }) {
       const entry = Object.assign({}, next[loserKey]);
       // 已經存在則不重複加
       if (entry.pays.some(p => p.toId === toId)) return m;
-      entry.pays = [...entry.pays, { toLabel: poolItem.label, toId: poolItem.id, toBank: poolItem.bank, amount: 0 }];
+      entry.pays = [...entry.pays, { toLabel: poolItem.label, toId: poolItem.id, toBank: poolItem.bank, amount: "" }];
       next[loserKey] = entry;
       return next;
     });
@@ -1189,14 +1191,20 @@ function TabSettle({ data, setData }) {
       return;
     }
 
-    // Save into session
+    // Save into session — 把空字串/字串數字統一轉成數字
     const editor = (typeof window !== "undefined" && window.__currentUser) || "";
+    const normalizedMap = {};
+    Object.entries(editedMap).forEach(([key, entry]) => {
+      normalizedMap[key] = Object.assign({}, entry, {
+        pays: entry.pays.map(p => Object.assign({}, p, { amount: parseInt(p.amount) || 0 }))
+      });
+    });
     setData(d => {
       const newSessions = d.sessions.map(sess => {
         if (sess.id !== selId) return sess;
         return Object.assign({}, sess, {
           customSettlement: {
-            paymentMap: editedMap,
+            paymentMap: normalizedMap,
             editor: editor,
             editTs: Date.now(),
             pairs: pairs,
@@ -1331,7 +1339,9 @@ function TabSettle({ data, setData }) {
                       </div>
                       {editMode ? (
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <input type="number" value={p.amount} onChange={e => updatePayAmount(key, i, e.target.value)}
+                          <input type="text" inputMode="numeric" value={p.amount}
+                            placeholder="0"
+                            onChange={e => updatePayAmount(key, i, e.target.value)}
                             style={{ width: 90, background: C.surface, border: `1px solid ${C.gold}66`, color: C.green,
                               padding: "4px 8px", borderRadius: 3, fontFamily: "monospace", fontWeight: 700, fontSize: 13, textAlign: "right", outline: "none" }} />
                           <button onClick={() => removePay(key, i)} title="刪除"
