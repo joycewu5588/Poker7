@@ -355,6 +355,22 @@ function buildSettle(s, members, pairs) {
   const dealerTotal = s.dealerWage + dealerTips;
   const regular = s.players.filter(p => p.type !== "dealer");
 
+  // 找出 Dealer 的 id (如果有的話)
+  const dealerEntryEarly = s.players.find(p => p.type === "dealer");
+  const dealerId = dealerEntryEarly ? resolveId(dealerEntryEarly.name, members) : null;
+  const dealerName = dealerEntryEarly ? dealerEntryEarly.name : null;
+
+  // 檢查 Dealer 是否在 pairs 中（要跟某玩家合併）
+  let dealerMergedInto = null; // 如果 Dealer 被併進某 pair，這裡記錄該 pair 的 canonical id
+  if (dealerId) {
+    for (const pair of pairs) {
+      if (pair.includes(dealerId)) {
+        dealerMergedInto = pair[0];
+        break;
+      }
+    }
+  }
+
   // Apply pairing: merge paired players
   const merged = {};
   for (const p of regular) {
@@ -375,17 +391,26 @@ function buildSettle(s, members, pairs) {
     merged[groupId].amount += p.amount;
   }
 
+  // 如果 Dealer 在 pair 中，把 dealerTotal 併進該 pair（pair 中其他人的 amount）
+  if (dealerMergedInto !== null && dealerTotal !== 0) {
+    if (!merged[dealerMergedInto]) {
+      // pair 中其他人沒玩，但有配對 → 建立 group
+      const dealerPair = pairs.find(p => p.includes(dealerId));
+      const groupName = dealerPair.map(id => { const m = members.find(x => x.id === id); return m ? m.name : id; }).join("+");
+      const groupBank = bankOf(dealerPair[0], members);
+      merged[dealerMergedInto] = { label: groupName, id: dealerMergedInto, bank: groupBank, amount: 0 };
+    }
+    merged[dealerMergedInto].amount += dealerTotal;
+  }
+
   const groups = Object.values(merged);
   const winners = groups.filter(g => g.amount > 0).sort((a, b) => b.amount - a.amount);
   const losers  = groups.filter(g => g.amount < 0).sort((a, b) => a.amount - b.amount);
 
   const pool = [];
   winners.forEach(g => pool.push({ label: g.label, id: g.id, bank: bankOf(g.id, members), amount: g.amount, splittable: false }));
-  if (dealerTotal > 0) {
-    // 用實際填寫的 Dealer（小雨/芭比/...），不要寫死小雨
-    const dealerEntry = s.players.find(p => p.type === "dealer");
-    const dealerName = dealerEntry ? dealerEntry.name : "小雨";
-    const dealerId = dealerEntry ? resolveId(dealerEntry.name, members) : "小雨";
+  // 只有 Dealer 沒被併入 pair 時，才獨立放進 pool
+  if (dealerTotal > 0 && dealerMergedInto === null) {
     pool.push({ label: "Dealer " + dispName(dealerName, members), id: dealerId, bank: bankOf(dealerId, members), amount: dealerTotal, splittable: true });
   }
   pool.push({ label: "場地", id: "場地", bank: bankOf("場地", members), amount: s.venueFee, splittable: false });
@@ -646,7 +671,7 @@ function TabRecords({ data, setData, onEdit }) {
               <FR label="水錢收入" value={fmtAbs(s.totalWater)} />
               <FR label="場地費" value={`-${fmtAbs(s.venueFee)}`} valueColor={C.red} />
               <FR label="Dealer薪" value={`-${fmtAbs(s.dealerWage)}`} valueColor={C.red} />
-              {s.helperTip > 0 && <FR label="工讀生小費" value={`-${fmtAbs(s.helperTip)}`} valueColor={C.red} />}
+              {s.helperTip > 0 && <FR label="管家小費" value={`-${fmtAbs(s.helperTip)}`} valueColor={C.red} />}
               {s.mealFee > 0 && <div style={{ fontSize: 11, marginBottom: 3 }}>
                 <span style={{ background: C.blue+"1a", color: C.blue, border:`1px solid ${C.blue}33`, padding:"1px 6px", borderRadius:3, marginRight:4 }}>餐費 {fmtAbs(s.mealFee)}</span>
               </div>}
@@ -893,7 +918,7 @@ function TabNew({ data, setData, editingId, clearEditing }) {
           <Input label="💰 水錢收入" type="number" placeholder="e.g. 32100" value={form.totalWater} onChange={e => setForm(f => ({ ...f, totalWater: e.target.value }))} />
           <Input label="🏠 場地費" type="number" value={form.venueFee} onChange={e => setForm(f => ({ ...f, venueFee: e.target.value }))} />
           <Input label="👔 Dealer薪資" type="number" value={form.dealerWage} onChange={e => setForm(f => ({ ...f, dealerWage: e.target.value }))} />
-          <Input label="🧑‍🎓 工讀生小費" type="number" placeholder="現金支出" value={form.helperTip} onChange={e => setForm(f => ({ ...f, helperTip: e.target.value }))} />
+          <Input label="🧑‍🎓 管家小費" type="number" placeholder="現金支出" value={form.helperTip} onChange={e => setForm(f => ({ ...f, helperTip: e.target.value }))} />
           <Input label="📝 備註" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} placeholder="自由填寫" />
           <Input label="🍱 餐費（純記錄）" type="number" value={form.mealFee} onChange={e => setForm(f => ({ ...f, mealFee: e.target.value }))} />
           <Input label="🎰 Jackpot（純記錄）" type="number" value={form.jackpot} onChange={e => setForm(f => ({ ...f, jackpot: e.target.value }))} />
@@ -1075,7 +1100,7 @@ function TabSettle({ data, setData }) {
     setSaveMsg("");
   }, [selId]);
 
-  const sessionPlayers = s ? [...new Set(s.players.filter(p => p.type !== "dealer").map(p => resolveId(p.name, members)))] : [];
+  const sessionPlayers = s ? [...new Set(s.players.map(p => resolveId(p.name, members)))] : [];
 
   const copyBill = (entry) => {
     const lines = [`${s.date} 結算帳單`, ""];
