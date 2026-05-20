@@ -337,7 +337,7 @@ const DEFAULT_DATA = { sessions: DEFAULT_SESSIONS, members: DEFAULT_MEMBERS, exp
 // ═══════════════════════════════════════════════════════
 const fmt    = n => (n >= 0 ? "+" : "-") + Math.abs(n).toLocaleString();
 const fmtAbs = n => Math.abs(n).toLocaleString();
-const calcReserve = s => s.reserveOverride !== undefined ? s.reserveOverride : s.totalWater - s.venueFee - s.dealerWage - (s.helperTip || 0);
+const calcReserve = s => s.reserveOverride !== undefined ? s.reserveOverride : s.totalWater - s.venueFee - s.dealerWage;
 
 function resolveId(name, members) {
   const n = (name || "").trim().toLowerCase();
@@ -353,6 +353,7 @@ function buildSettle(s, members, pairs) {
   const res = calcReserve(s);
   const dealerTips = s.players.filter(p => p.type === "dealer").reduce((a, p) => a + p.amount, 0);
   const dealerTotal = s.dealerWage + dealerTips;
+  const helperTotal = s.helperTip || 0; // 管家小費
   const regular = s.players.filter(p => p.type !== "dealer");
 
   // 找出 Dealer 的 id (如果有的話)
@@ -361,7 +362,7 @@ function buildSettle(s, members, pairs) {
   const dealerName = dealerEntryEarly ? dealerEntryEarly.name : null;
 
   // 檢查 Dealer 是否在 pairs 中（要跟某玩家合併）
-  let dealerMergedInto = null; // 如果 Dealer 被併進某 pair，這裡記錄該 pair 的 canonical id
+  let dealerMergedInto = null;
   if (dealerId) {
     for (const pair of pairs) {
       if (pair.includes(dealerId)) {
@@ -371,19 +372,31 @@ function buildSettle(s, members, pairs) {
     }
   }
 
+  // 檢查管家是否在 pairs 中
+  let helperMergedInto = null;
+  for (const pair of pairs) {
+    if (pair.includes("管家")) {
+      helperMergedInto = pair[0];
+      break;
+    }
+  }
+
   // Apply pairing: merge paired players
   const merged = {};
   for (const p of regular) {
     const pid = resolveId(p.name, members);
-    // find if this player is in a pair
     let groupId = pid;
     let groupName = dispName(p.name, members);
     let groupBank = bankOf(pid, members);
     for (const pair of pairs) {
       if (pair.includes(pid)) {
-        groupId = pair[0]; // canonical id = first in pair
-        groupName = pair.map(id => { const m = members.find(x => x.id === id); return m ? m.name : id; }).join("+");
-        groupBank = bankOf(pair[0], members); // use first person's bank
+        groupId = pair[0];
+        groupName = pair.map(id => {
+          if (id === "管家") return "管家";
+          const m = members.find(x => x.id === id);
+          return m ? m.name : id;
+        }).join("+");
+        groupBank = bankOf(pair[0], members);
         break;
       }
     }
@@ -391,16 +404,34 @@ function buildSettle(s, members, pairs) {
     merged[groupId].amount += p.amount;
   }
 
-  // 如果 Dealer 在 pair 中，把 dealerTotal 併進該 pair（pair 中其他人的 amount）
+  // 如果 Dealer 在 pair 中，把 dealerTotal 併進該 pair
   if (dealerMergedInto !== null && dealerTotal !== 0) {
     if (!merged[dealerMergedInto]) {
-      // pair 中其他人沒玩，但有配對 → 建立 group
       const dealerPair = pairs.find(p => p.includes(dealerId));
-      const groupName = dealerPair.map(id => { const m = members.find(x => x.id === id); return m ? m.name : id; }).join("+");
+      const groupName = dealerPair.map(id => {
+        if (id === "管家") return "管家";
+        const m = members.find(x => x.id === id);
+        return m ? m.name : id;
+      }).join("+");
       const groupBank = bankOf(dealerPair[0], members);
       merged[dealerMergedInto] = { label: groupName, id: dealerMergedInto, bank: groupBank, amount: 0 };
     }
     merged[dealerMergedInto].amount += dealerTotal;
+  }
+
+  // 如果管家在 pair 中，把 helperTotal 併進該 pair
+  if (helperMergedInto !== null && helperTotal !== 0) {
+    if (!merged[helperMergedInto]) {
+      const helperPair = pairs.find(p => p.includes("管家"));
+      const groupName = helperPair.map(id => {
+        if (id === "管家") return "管家";
+        const m = members.find(x => x.id === id);
+        return m ? m.name : id;
+      }).join("+");
+      const groupBank = bankOf(helperPair[0], members);
+      merged[helperMergedInto] = { label: groupName, id: helperMergedInto, bank: groupBank, amount: 0 };
+    }
+    merged[helperMergedInto].amount += helperTotal;
   }
 
   const groups = Object.values(merged);
@@ -409,9 +440,13 @@ function buildSettle(s, members, pairs) {
 
   const pool = [];
   winners.forEach(g => pool.push({ label: g.label, id: g.id, bank: bankOf(g.id, members), amount: g.amount, splittable: false }));
-  // 只有 Dealer 沒被併入 pair 時，才獨立放進 pool
+  // Dealer 沒被併入 pair 時，獨立放進 pool
   if (dealerTotal > 0 && dealerMergedInto === null) {
     pool.push({ label: "Dealer " + dispName(dealerName, members), id: dealerId, bank: bankOf(dealerId, members), amount: dealerTotal, splittable: true });
+  }
+  // 管家沒被併入 pair 時，獨立放進 pool（沒銀行帳號）
+  if (helperTotal > 0 && helperMergedInto === null) {
+    pool.push({ label: "管家", id: "管家", bank: "", amount: helperTotal, splittable: true });
   }
   pool.push({ label: "場地", id: "場地", bank: bankOf("場地", members), amount: s.venueFee, splittable: false });
   if (res > 0) pool.push({ label: "公積金 (Joyce)", id: "Joyce", bank: bankOf("Joyce", members), amount: res, splittable: true });
@@ -671,7 +706,7 @@ function TabRecords({ data, setData, onEdit }) {
               <FR label="水錢收入" value={fmtAbs(s.totalWater)} />
               <FR label="場地費" value={`-${fmtAbs(s.venueFee)}`} valueColor={C.red} />
               <FR label="Dealer薪" value={`-${fmtAbs(s.dealerWage)}`} valueColor={C.red} />
-              {s.helperTip > 0 && <FR label="管家小費" value={`-${fmtAbs(s.helperTip)}`} valueColor={C.red} />}
+              {s.helperTip > 0 && <FR label="管家小費" value={fmtAbs(s.helperTip)} valueColor={C.green} />}
               {s.mealFee > 0 && <div style={{ fontSize: 11, marginBottom: 3 }}>
                 <span style={{ background: C.blue+"1a", color: C.blue, border:`1px solid ${C.blue}33`, padding:"1px 6px", borderRadius:3, marginRight:4 }}>餐費 {fmtAbs(s.mealFee)}</span>
               </div>}
@@ -801,7 +836,7 @@ function TabNew({ data, setData, editingId, clearEditing }) {
   }, [editingId]);
 
   const fv = k => parseInt(form[k]) || 0;
-  const reserve = fv("totalWater") - fv("venueFee") - fv("dealerWage") - fv("helperTip");
+  const reserve = fv("totalWater") - fv("venueFee") - fv("dealerWage");
   const tipNum = parseInt(dealerTip.amount) || 0;
   const signedAmt = p => (p.sign === "win" ? 1 : -1) * (parseInt(p.absAmt) || 0);
   const playerSum = players.reduce((a, p) => a + signedAmt(p), 0);
@@ -925,7 +960,7 @@ function TabNew({ data, setData, editingId, clearEditing }) {
         </div>
         <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 4,
           padding: "7px 12px", display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12 }}>
-          <span style={{ color: C.dim }}>水錢餘 = {fmtAbs(fv("totalWater"))} − {fmtAbs(fv("venueFee"))} − {fmtAbs(fv("dealerWage"))} − {fmtAbs(fv("helperTip"))}</span>
+          <span style={{ color: C.dim }}>水錢餘 = {fmtAbs(fv("totalWater"))} − {fmtAbs(fv("venueFee"))} − {fmtAbs(fv("dealerWage"))}</span>
           <span style={{ fontFamily: "monospace", fontWeight: 700, color: reserve >= 0 ? C.green : C.red }}>{fmt(reserve)}</span>
         </div>
 
@@ -1100,7 +1135,12 @@ function TabSettle({ data, setData }) {
     setSaveMsg("");
   }, [selId]);
 
-  const sessionPlayers = s ? [...new Set(s.players.map(p => resolveId(p.name, members)))] : [];
+  const sessionPlayers = s ? (() => {
+    const list = [...new Set(s.players.map(p => resolveId(p.name, members)))];
+    // 如果這場有管家小費，加入「管家」選項
+    if ((s.helperTip || 0) > 0) list.push("管家");
+    return list;
+  })() : [];
 
   const copyBill = (entry) => {
     const lines = [`${s.date} 結算帳單`, ""];
