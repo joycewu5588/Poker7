@@ -337,7 +337,7 @@ const DEFAULT_DATA = { sessions: DEFAULT_SESSIONS, members: DEFAULT_MEMBERS, exp
 // ═══════════════════════════════════════════════════════
 const fmt    = n => (n >= 0 ? "+" : "-") + Math.abs(n).toLocaleString();
 const fmtAbs = n => Math.abs(n).toLocaleString();
-const calcReserve = s => s.reserveOverride !== undefined ? s.reserveOverride : s.totalWater - s.venueFee - s.dealerWage;
+const calcReserve = s => s.reserveOverride !== undefined ? s.reserveOverride : s.totalWater - s.venueFee - s.dealerWage - (s.helperTip || 0);
 
 function resolveId(name, members) {
   const n = (name || "").trim().toLowerCase();
@@ -836,7 +836,7 @@ function TabNew({ data, setData, editingId, clearEditing }) {
   }, [editingId]);
 
   const fv = k => parseInt(form[k]) || 0;
-  const reserve = fv("totalWater") - fv("venueFee") - fv("dealerWage");
+  const reserve = fv("totalWater") - fv("venueFee") - fv("dealerWage") - fv("helperTip");
   const tipNum = parseInt(dealerTip.amount) || 0;
   const signedAmt = p => (p.sign === "win" ? 1 : -1) * (parseInt(p.absAmt) || 0);
   const playerSum = players.reduce((a, p) => a + signedAmt(p), 0);
@@ -960,7 +960,7 @@ function TabNew({ data, setData, editingId, clearEditing }) {
         </div>
         <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 4,
           padding: "7px 12px", display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12 }}>
-          <span style={{ color: C.dim }}>水錢餘 = {fmtAbs(fv("totalWater"))} − {fmtAbs(fv("venueFee"))} − {fmtAbs(fv("dealerWage"))}</span>
+          <span style={{ color: C.dim }}>水錢餘 = {fmtAbs(fv("totalWater"))} − {fmtAbs(fv("venueFee"))} − {fmtAbs(fv("dealerWage"))} − {fmtAbs(fv("helperTip"))}</span>
           <span style={{ fontFamily: "monospace", fontWeight: 700, color: reserve >= 0 ? C.green : C.red }}>{fmt(reserve)}</span>
         </div>
 
