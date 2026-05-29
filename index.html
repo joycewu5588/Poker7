@@ -337,7 +337,11 @@ const DEFAULT_DATA = { sessions: DEFAULT_SESSIONS, members: DEFAULT_MEMBERS, exp
 // ═══════════════════════════════════════════════════════
 const fmt    = n => (n >= 0 ? "+" : "-") + Math.abs(n).toLocaleString();
 const fmtAbs = n => Math.abs(n).toLocaleString();
-const calcReserve = s => s.reserveOverride !== undefined ? s.reserveOverride : s.totalWater - s.venueFee - s.dealerWage - (s.helperTip || 0);
+const calcReserve = s => {
+  // 用公式重算（包含管家小費），舊資料的 reserveOverride 不再優先採用
+  const calc = s.totalWater - s.venueFee - s.dealerWage - (s.helperTip || 0);
+  return calc;
+};
 
 function resolveId(name, members) {
   const n = (name || "").trim().toLowerCase();
