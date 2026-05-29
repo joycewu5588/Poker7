@@ -710,7 +710,7 @@ function TabRecords({ data, setData, onEdit }) {
               <FR label="水錢收入" value={fmtAbs(s.totalWater)} />
               <FR label="場地費" value={`-${fmtAbs(s.venueFee)}`} valueColor={C.red} />
               <FR label="Dealer薪" value={`-${fmtAbs(s.dealerWage)}`} valueColor={C.red} />
-              {s.helperTip > 0 && <FR label="管家小費" value={fmtAbs(s.helperTip)} valueColor={C.green} />}
+              {s.helperTip > 0 && <FR label="管家小費" value={`-${fmtAbs(s.helperTip)}`} valueColor={C.red} />}
               {s.mealFee > 0 && <div style={{ fontSize: 11, marginBottom: 3 }}>
                 <span style={{ background: C.blue+"1a", color: C.blue, border:`1px solid ${C.blue}33`, padding:"1px 6px", borderRadius:3, marginRight:4 }}>餐費 {fmtAbs(s.mealFee)}</span>
               </div>}
