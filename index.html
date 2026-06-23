@@ -133,11 +133,11 @@ try {
   if (savedUser && EDITORS.indexOf(savedUser) !== -1) {
     window.__currentUser = savedUser;
   }
-  if (sessionStorage.getItem("guandi_pw_ok") === "1") {
-    document.getElementById("pw-gate").style.display = "none";
-    if (!window.__currentUser) {
-      _showUserGate();
-    }
+  // ── 臨時：自動通過密碼閘門（密碼按鈕在 iOS 卡住，暫時跳過）──
+  try { sessionStorage.setItem("guandi_pw_ok", "1"); } catch(e) {}
+  document.getElementById("pw-gate").style.display = "none";
+  if (!window.__currentUser) {
+    _showUserGate();
   }
 } catch(e) {}
 </script>
