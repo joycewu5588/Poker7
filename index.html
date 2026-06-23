@@ -92,12 +92,12 @@ function _pwSubmit() {
     // 唯讀模式不顯示身份選擇，直接進 App
   } else {
     var err = document.getElementById("pw-err");
-    if (err) err.textContent = "密碼錯誤";
+    if (err) err.textContent = "密碼錯誤（輸入了 " + _pwEntered + "）";
     _pwEntered = "";
     _pwRenderDots();
     // 震動回饋（支援的裝置）
     try { if (navigator.vibrate) navigator.vibrate(200); } catch(e) {}
-    setTimeout(function(){ var e2 = document.getElementById("pw-err"); if(e2) e2.textContent = ""; }, 2000);
+    setTimeout(function(){ var e2 = document.getElementById("pw-err"); if(e2) e2.textContent = ""; }, 3000);
   }
 }
 </script>
