@@ -1567,7 +1567,7 @@ function TabCumul({ data }) {
       qMap[k].total += p.amount;
     }));
     const sorted = Object.values(qMap).sort((a, b) => b.total - a.total);
-    return { q, champ: sorted[0] || null, sessionCount: qSessions.length };
+    return { q, champ: sorted[0] || null, loser: sorted.length > 1 ? sorted[sorted.length - 1] : null, sessionCount: qSessions.length };
   });
 
   const Q_LABELS = { all: "全年", Q1: "Q1 (1-3月)", Q2: "Q2 (4-6月)", Q3: "Q3 (7-9月)", Q4: "Q4 (10-12月)" };
@@ -1605,7 +1605,7 @@ function TabCumul({ data }) {
           🏆 {champYear} 每季冠軍
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 11 }}>
-          {quarterChamps.map(({ q, champ, sessionCount }) => (
+          {quarterChamps.map(({ q, champ, loser, sessionCount }) => (
             <div key={q} style={{
               background: champ ? "linear-gradient(135deg,rgba(201,168,76,.14),rgba(201,168,76,.04))" : C.surface,
               border: `1px solid ${champ ? C.gold : C.border}`, borderRadius: 8, padding: "13px 15px",
@@ -1613,9 +1613,15 @@ function TabCumul({ data }) {
               <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.1em", marginBottom: 7 }}>{Q_LABELS[q]}</div>
               {champ ? (
                 <div>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: C.goldLight, marginBottom: 2 }}>👑 {champ.name}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: C.goldLight, marginBottom: 1 }}>👑 {champ.name}</div>
                   <div style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: champ.total >= 0 ? C.green : C.red }}>{fmt(champ.total)}</div>
-                  <div style={{ fontSize: 10, color: C.dim, marginTop: 3 }}>{sessionCount} 場</div>
+                  {loser && (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: C.red, marginBottom: 1 }}>🐟 {loser.name}</div>
+                      <div style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: C.red }}>{fmt(loser.total)}</div>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 10, color: C.dim, marginTop: 7 }}>{sessionCount} 場</div>
                 </div>
               ) : (
                 <div style={{ fontSize: 13, color: C.dim, paddingTop: 4 }}>尚無資料</div>
