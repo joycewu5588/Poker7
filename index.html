@@ -26,23 +26,55 @@
     border-radius: 8px; padding: 28px 24px; width: 90%; max-width: 320px; text-align: center; }
   #pw-gate h1 { color: #c9a84c; margin: 0 0 4px; font-size: 22px; font-weight: 700; }
   #pw-gate p { color: #8d92aa; font-size: 12px; margin: 0 0 18px; font-family: 'IBM Plex Mono', monospace; }
-  #pw-gate input { width: 100%; padding: 10px 12px; background: #1a1f2e; border: 1px solid #2a3050;
-    color: #e8e4d8; border-radius: 4px; font-size: 16px; font-family: 'IBM Plex Mono', monospace;
-    outline: none; box-sizing: border-box; text-align: center; letter-spacing: 4px; }
-  #pw-gate input:focus { border-color: #c9a84c; }
-  #pw-gate button { margin-top: 12px; width: 100%; padding: 10px; background: #c9a84c;
-    color: #0a0c10; border: none; border-radius: 4px; font-size: 14px; font-weight: 700;
-    cursor: pointer; font-family: 'Noto Serif TC', serif; }
-  #pw-gate .err { color: #d97070; font-size: 12px; margin-top: 10px; min-height: 16px;
+  /* 密碼點點顯示 */
+  #pw-dots { display: flex; justify-content: center; gap: 14px; margin: 4px 0 22px; }
+  #pw-dots .dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #2a3050; transition: all .15s; }
+  #pw-dots .dot.filled { background: #c9a84c; border-color: #c9a84c; }
+  /* 9 宮格鍵盤 */
+  #pw-keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  #pw-keypad .key { aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    background: #1a1f2e; border: 1px solid #2a3050; border-radius: 12px;
+    color: #e8e4d8; font-size: 26px; font-weight: 600; font-family: 'IBM Plex Mono', monospace;
+    cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
+    transition: background .1s; }
+  #pw-keypad .key:active { background: #c9a84c; color: #0a0c10; }
+  #pw-keypad .key.fn { font-size: 15px; background: transparent; border-color: transparent; color: #8d92aa; }
+  #pw-keypad .key.fn:active { background: #2a3050; color: #e8e4d8; }
+  #pw-gate .err { color: #d97070; font-size: 12px; margin-top: 16px; min-height: 16px;
     font-family: 'IBM Plex Mono', monospace; }
 </style>
 </head>
 <body>
 <script>
-function _pwCheck() {
-  var raw = document.getElementById("pw-input").value;
-  var v = (raw || "").replace(/[^0-9]/g, ""); // 去掉空格等非數字字元（iOS 自動填充防呆）
-  if (v === "168168") {
+var _pwEntered = "";
+var _pwTarget = "168168";
+
+function _pwRenderDots() {
+  var dots = document.querySelectorAll("#pw-dots .dot");
+  for (var i = 0; i < dots.length; i++) {
+    if (i < _pwEntered.length) dots[i].classList.add("filled");
+    else dots[i].classList.remove("filled");
+  }
+}
+
+function _pwPress(d) {
+  if (_pwEntered.length >= 6) return;
+  _pwEntered += d;
+  _pwRenderDots();
+  var err = document.getElementById("pw-err");
+  if (err) err.textContent = "";
+  if (_pwEntered.length === 6) {
+    setTimeout(_pwSubmit, 120);
+  }
+}
+
+function _pwDel() {
+  _pwEntered = _pwEntered.slice(0, -1);
+  _pwRenderDots();
+}
+
+function _pwSubmit() {
+  if (_pwEntered === _pwTarget) {
     try { sessionStorage.setItem("guandi_pw_ok", "1"); } catch(e) {}
     document.getElementById("pw-gate").style.display = "none";
     if (!window.__currentUser) {
@@ -50,34 +82,40 @@ function _pwCheck() {
     }
   } else {
     var err = document.getElementById("pw-err");
-    if (v.length === 0) {
-      err.textContent = "請輸入密碼";
-    } else if (v.length < 6) {
-      err.textContent = "密碼需 6 位數（目前 " + v.length + " 位）";
-    } else {
-      err.textContent = "密碼錯誤";
-    }
-    document.getElementById("pw-input").value = "";
-    setTimeout(function(){ var e2 = document.getElementById("pw-err"); if(e2) e2.textContent = ""; }, 2500);
-  }
-  return false;
-}
-function _pwInput() {
-  var v = (document.getElementById("pw-input").value || "").replace(/[^0-9]/g, "");
-  if (v.length >= 6) {
-    _pwCheck();
+    if (err) err.textContent = "密碼錯誤";
+    _pwEntered = "";
+    _pwRenderDots();
+    // 震動回饋（支援的裝置）
+    try { if (navigator.vibrate) navigator.vibrate(200); } catch(e) {}
+    setTimeout(function(){ var e2 = document.getElementById("pw-err"); if(e2) e2.textContent = ""; }, 2000);
   }
 }
 </script>
 <div id="loading"><div class="spin"></div><div>載入中...</div></div>
 
-<!-- 密碼閘門 -->
+<!-- 密碼閘門：9 宮格鍵盤 -->
 <div id="pw-gate">
   <div class="box">
     <h1>🎴 官邸聚會帳務</h1>
     <p>請輸入 6 位數密碼</p>
-    <input type="tel" id="pw-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" autofocus oninput="_pwInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();_pwCheck();}" />
-    <button type="button" id="pw-btn" onclick="_pwCheck()" ontouchstart="">進入</button>
+    <div id="pw-dots">
+      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+    </div>
+    <div id="pw-keypad">
+      <div class="key" onclick="_pwPress('1')">1</div>
+      <div class="key" onclick="_pwPress('2')">2</div>
+      <div class="key" onclick="_pwPress('3')">3</div>
+      <div class="key" onclick="_pwPress('4')">4</div>
+      <div class="key" onclick="_pwPress('5')">5</div>
+      <div class="key" onclick="_pwPress('6')">6</div>
+      <div class="key" onclick="_pwPress('7')">7</div>
+      <div class="key" onclick="_pwPress('8')">8</div>
+      <div class="key" onclick="_pwPress('9')">9</div>
+      <div class="key fn" onclick="_pwDel()">⌫ 刪除</div>
+      <div class="key" onclick="_pwPress('0')">0</div>
+      <div class="key fn"></div>
+    </div>
     <div class="err" id="pw-err"></div>
   </div>
 </div>
@@ -133,11 +171,11 @@ try {
   if (savedUser && EDITORS.indexOf(savedUser) !== -1) {
     window.__currentUser = savedUser;
   }
-  // ── 臨時：自動通過密碼閘門（密碼按鈕在 iOS 卡住，暫時跳過）──
-  try { sessionStorage.setItem("guandi_pw_ok", "1"); } catch(e) {}
-  document.getElementById("pw-gate").style.display = "none";
-  if (!window.__currentUser) {
-    _showUserGate();
+  if (sessionStorage.getItem("guandi_pw_ok") === "1") {
+    document.getElementById("pw-gate").style.display = "none";
+    if (!window.__currentUser) {
+      _showUserGate();
+    }
   }
 } catch(e) {}
 </script>
