@@ -48,6 +48,7 @@
 <script>
 var _pwEntered = "";
 var _pwTarget = "168168";
+var _pwReadonly = "200000"; // 唯讀密碼：只能看統計
 
 function _pwRenderDots() {
   var dots = document.querySelectorAll("#pw-dots .dot");
@@ -75,11 +76,20 @@ function _pwDel() {
 
 function _pwSubmit() {
   if (_pwEntered === _pwTarget) {
+    // 完整權限密碼
     try { sessionStorage.setItem("guandi_pw_ok", "1"); } catch(e) {}
+    window.__readonly = false;
     document.getElementById("pw-gate").style.display = "none";
     if (!window.__currentUser) {
       _showUserGate();
     }
+  } else if (_pwEntered === _pwReadonly) {
+    // 唯讀密碼：只能看統計，不記錄身份，直接進入
+    try { sessionStorage.setItem("guandi_pw_ok", "ro"); } catch(e) {}
+    window.__readonly = true;
+    window.__currentUser = null;
+    document.getElementById("pw-gate").style.display = "none";
+    // 唯讀模式不顯示身份選擇，直接進 App
   } else {
     var err = document.getElementById("pw-err");
     if (err) err.textContent = "密碼錯誤";
@@ -171,11 +181,18 @@ try {
   if (savedUser && EDITORS.indexOf(savedUser) !== -1) {
     window.__currentUser = savedUser;
   }
-  if (sessionStorage.getItem("guandi_pw_ok") === "1") {
+  var pwState = sessionStorage.getItem("guandi_pw_ok");
+  if (pwState === "1") {
+    window.__readonly = false;
     document.getElementById("pw-gate").style.display = "none";
     if (!window.__currentUser) {
       _showUserGate();
     }
+  } else if (pwState === "ro") {
+    // 唯讀模式
+    window.__readonly = true;
+    window.__currentUser = null;
+    document.getElementById("pw-gate").style.display = "none";
   }
 } catch(e) {}
 </script>
@@ -2204,7 +2221,9 @@ const TABS = [
 ];
 
 function PokerApp() {
-  const [tab, setTab] = useState("new");
+  const isReadonly = typeof window !== "undefined" && window.__readonly === true;
+  const visibleTabs = isReadonly ? TABS.filter(t => t.id === "cumul") : TABS;
+  const [tab, setTab] = useState(isReadonly ? "cumul" : "new");
   const [data, setDataState] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -2295,17 +2314,23 @@ function PokerApp() {
           <div style={{ fontSize: 18, fontWeight: 700, color: C.goldLight, letterSpacing: "0.1em" }}>🎴 官邸聚會帳務</div>
           <div style={{ fontSize: 10, color: error ? C.red : C.dim, fontFamily: "monospace", marginTop: 1 }}>
             FIREBASE · {error ? "❌ " + error : (saving ? "⏳ 儲存中..." : "✓ 已同步")}
-            {typeof window !== "undefined" && window.__currentUser && <span style={{ marginLeft: 8, color: C.gold }}>👤 {window.__currentUser}</span>}
-            <button onClick={() => {
-              try { localStorage.removeItem("guandi_user"); } catch(e) {}
-              window.__currentUser = null;
-              if (typeof _showUserGate === "function") _showUserGate();
-            }} style={{ marginLeft: 8, background: "transparent", border: `1px solid ${C.border}`,
-              color: C.muted, padding: "0 6px", borderRadius: 3, cursor: "pointer", fontSize: 9, fontFamily: "inherit" }}>切換</button>
+            {isReadonly ? (
+              <span style={{ marginLeft: 8, color: C.blue, fontWeight: 700 }}>👁 唯讀模式</span>
+            ) : (
+              <>
+                {typeof window !== "undefined" && window.__currentUser && <span style={{ marginLeft: 8, color: C.gold }}>👤 {window.__currentUser}</span>}
+                <button onClick={() => {
+                  try { localStorage.removeItem("guandi_user"); } catch(e) {}
+                  window.__currentUser = null;
+                  if (typeof _showUserGate === "function") _showUserGate();
+                }} style={{ marginLeft: 8, background: "transparent", border: `1px solid ${C.border}`,
+                  color: C.muted, padding: "0 6px", borderRadius: 3, cursor: "pointer", fontSize: 9, fontFamily: "inherit" }}>切換</button>
+              </>
+            )}
           </div>
         </div>
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {TABS.map(t => (
+          {visibleTabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               style={{ background: tab === t.id ? "rgba(201,168,76,.12)" : "transparent",
                 border: `1px solid ${tab === t.id ? C.gold : C.border}`,
@@ -2320,8 +2345,8 @@ function PokerApp() {
 
       {/* Body */}
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "22px 16px" }}>
-        {/* 未結算場次提示橫條 */}
-        {(() => {
+        {/* 未結算場次提示橫條（唯讀模式不顯示） */}
+        {!isReadonly && (() => {
           const unsettled = data.sessions.filter(s => !s.settled);
           if (unsettled.length === 0) return null;
           return (
@@ -2346,14 +2371,20 @@ function PokerApp() {
         <div style={{ marginBottom: 16 }}>
           <SectionHeader>{TABS.find(t => t.id === tab)?.label || ""}</SectionHeader>
         </div>
-        {tab === "records"  && <TabRecords  data={data} setData={setData} onEdit={handleEdit} />}
-        {tab === "new"      && <TabNew      data={data} setData={setData} editingId={editingId} clearEditing={() => setEditingId(null)} />}
-        {tab === "settle"   && <TabSettle   data={data} setData={setData} />}
-        {tab === "cumul"    && <TabCumul    data={data} />}
-        {tab === "reserve"  && <TabReserve  data={data} setData={setData} />}
-        {tab === "bonus"    && <TabBonus    data={data} />}
-        {tab === "members"  && <TabMembers  data={data} setData={setData} />}
-        {tab === "backup"   && <TabBackup   data={data} setData={setData} />}
+        {isReadonly ? (
+          <TabCumul data={data} />
+        ) : (
+          <>
+            {tab === "records"  && <TabRecords  data={data} setData={setData} onEdit={handleEdit} />}
+            {tab === "new"      && <TabNew      data={data} setData={setData} editingId={editingId} clearEditing={() => setEditingId(null)} />}
+            {tab === "settle"   && <TabSettle   data={data} setData={setData} />}
+            {tab === "cumul"    && <TabCumul    data={data} />}
+            {tab === "reserve"  && <TabReserve  data={data} setData={setData} />}
+            {tab === "bonus"    && <TabBonus    data={data} />}
+            {tab === "members"  && <TabMembers  data={data} setData={setData} />}
+            {tab === "backup"   && <TabBackup   data={data} setData={setData} />}
+          </>
+        )}
       </div>
     </div>
   );
