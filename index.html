@@ -1710,7 +1710,7 @@ function TabCumul({ data }) {
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
-            <tr>{["名次","姓名","出席","累計輸贏","最佳場","最差場"].map(h => (
+            <tr>{["名次","姓名","出席","累計輸贏","每場平均","最佳場","最差場"].map(h => (
               <th key={h} style={{ textAlign: "left", padding: "8px 12px", borderBottom: `1px solid ${C.gold}`, color: C.gold, fontSize: 11, fontWeight: 400, letterSpacing: "0.1em", fontFamily: "monospace" }}>{h}</th>
             ))}</tr>
           </thead>
@@ -1723,6 +1723,7 @@ function TabCumul({ data }) {
                 <td style={{ padding: "7px 12px" }}>{r.name}</td>
                 <td style={{ padding: "7px 12px", fontFamily: "monospace" }}>{r.count}</td>
                 <td style={{ padding: "7px 12px", fontFamily: "monospace", fontWeight: 700, color: r.total >= 0 ? C.green : C.red }}>{fmt(r.total)}</td>
+                <td style={{ padding: "7px 12px", fontFamily: "monospace", color: (r.count > 0 ? r.total / r.count : 0) >= 0 ? C.green : C.red }}>{r.count > 0 ? fmt(Math.round(r.total / r.count)) : "-"}</td>
                 <td style={{ padding: "7px 12px", fontFamily: "monospace", color: C.green }}>{r.best === -Infinity ? "-" : fmt(r.best)}</td>
                 <td style={{ padding: "7px 12px", fontFamily: "monospace", color: C.red }}>{r.worst === Infinity ? "-" : fmt(r.worst)}</td>
               </tr>
