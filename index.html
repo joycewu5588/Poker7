@@ -590,10 +590,12 @@ function buildSettle(s, members, pairs) {
         if (mask & (1 << i)) { sum += candidates[i].rem; count++; if (sum > targetAmt) break; }
       }
       if (sum !== targetAmt) continue;
-      if (!best || count > best.count) {
+      // 偏好「最少筆數」的精準組合（1:1 完美配對最優先），避免一個輸家付太多筆
+      if (!best || count < best.count) {
         const items = [];
         for (let i = 0; i < N; i++) if (mask & (1 << i)) items.push(candidates[i]);
         best = { items: items, count: count };
+        if (count === 1) return best; // 找到 1:1 直接用
       }
     }
     return best;
@@ -601,8 +603,8 @@ function buildSettle(s, members, pairs) {
 
   // ──────────────────────────────────────────────
   // Pass A：迭代式找最佳配對。
-  // 每輪掃所有未完成輸家，挑「能配最多贏家」的那組先固定，
-  // 然後重新計算剩下的可能性。
+  // 每輪挑「筆數最少」的精準配對先固定（1:1 最優先），
+  // 同筆數時先處理大輸家，讓筆數平均分散。
   // ──────────────────────────────────────────────
   while (true) {
     let bestPair = null;
@@ -610,7 +612,8 @@ function buildSettle(s, members, pairs) {
       if (loser._done) continue;
       const combo = findBestCombo(loser.amount, poolRem);
       if (!combo) continue;
-      if (!bestPair || combo.count > bestPair.combo.count) {
+      if (!bestPair || combo.count < bestPair.combo.count ||
+          (combo.count === bestPair.combo.count && loser.amount > bestPair.loser.amount)) {
         bestPair = { loser: loser, combo: combo };
       }
     }
@@ -628,33 +631,38 @@ function buildSettle(s, members, pairs) {
   // Pass B：剩下輸家用貪婪法 + Gary/公積金 吸收零頭
   // ──────────────────────────────────────────────
   const SMALL_LEFTOVER = 5000;
-  for (const loser of negPool) {
-    if (loser._done) continue;
+  // 大輸家先處理，且每個輸家優先付「金額大」的收款方 → 每人筆數最少
+  const remainingLosers = negPool.filter(l => !l._done).sort((a, b) => b.amount - a.amount);
+  for (const loser of remainingLosers) {
     let rem = loser.amount;
     const pays = [];
 
-    for (const item of poolRem) {
+    // 每次都挑目前剩額最大的收款方
+    const sortedPool = () => poolRem.filter(it => it.rem > 0).sort((a, b) => b.rem - a.rem);
+    let guard = 0;
+    while (rem > 0 && guard++ < 100) {
+      let paid = false;
+      for (const item of sortedPool()) {
       if (rem <= 0) break;
       if (item.rem <= 0) continue;
 
-      if (!item.splittable && !isGary(item)) {
-        if (item.rem >= rem) {
-          const leftoverIfTaken = item.rem - rem;
-          if (leftoverIfTaken > 0 && leftoverIfTaken < SMALL_LEFTOVER) {
-            const fallback = poolRem.find(it => (isGary(it) || it.splittable) && it.rem >= rem);
-            if (fallback) continue;
-          }
-        }
-        if (item.rem < rem) {
-          const fallback = poolRem.find(it => (isGary(it) || it.splittable) && it.rem >= rem);
-          if (fallback) continue;
-        }
+      if (!item.splittable && !isGary(item) && rem < item.rem) {
+        // 部分支付會讓這位收款人要跟多個輸家收：
+        // 場地必須一筆收齊；若會留下 <5000 的零碎尾款也避免
+        const isVenue = item.id === "場地" || item.id === "隱家場地";
+        const leftover = item.rem - rem;
+        const hasOther = poolRem.some(it => it !== item && it.rem > 0 && (it.splittable || isGary(it) || it.rem <= rem));
+        if ((isVenue || leftover < SMALL_LEFTOVER) && hasOther) continue;
       }
 
       const take = Math.min(rem, item.rem);
       pays.push({ toLabel: item.label, toId: item.id, toBank: item.bank, amount: take });
       item.rem -= take;
       rem -= take;
+      paid = true;
+      break; // 重新排序後再挑下一個最大的
+      }
+      if (!paid) break; // 沒有任何可付對象，避免無限迴圈
     }
     paymentMap[loser.id + "||" + loser.label] = { loserLabel: loser.label, loserId: loser.id, total: loser.amount, pays };
   }
@@ -1151,7 +1159,7 @@ function TabNew({ data, setData, editingId, clearEditing }) {
             <div key={i} style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 28px", gap: 5, marginBottom: 5, alignItems: "center" }}>
               <select value={b.type} onChange={e => { const bs=[...bonuses]; bs[i]={...b,type:e.target.value}; setBonuses(bs); }} style={sel()}>
                 <option value="monster">🐲 怪物</option>
-                <option value="highhand">👑 High Hand</option>
+                <option value="highhand">👑 High Hand（已停辦）</option>
               </select>
               <select value={b.winner} onChange={e => { const bs=[...bonuses]; bs[i]={...b,winner:e.target.value}; setBonuses(bs); }} style={sel()}>
                 <option value="">-- 得獎者 --</option>
@@ -1244,6 +1252,32 @@ function TabSettle({ data, setData }) {
     lines.push(`合計：-${fmtAbs(entry.total)}`);
     const text = lines.join("\n");
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setCopied(entry.loserLabel); setTimeout(() => setCopied(""), 2000); });
+  };
+
+  // 複製「贏家收款通知」：列出誰會匯多少給這位收款人
+  const copyWinner = (winner) => {
+    const froms = [];
+    Object.values(displayMap).forEach(entry => {
+      entry.pays.forEach(pay => {
+        if (pay.toId === winner.id && pay.toLabel === winner.label) {
+          const amt = parseInt(pay.amount) || 0;
+          if (amt > 0) froms.push({ from: entry.loserLabel, amount: amt });
+        }
+      });
+    });
+    const lines = [`${s.date} 收款通知`, ""];
+    lines.push(`${winner.label} 本場共收 +${fmtAbs(winner.amount)}`);
+    lines.push("");
+    if (froms.length) {
+      lines.push("以下玩家會匯給你：");
+      froms.forEach(f => lines.push(`• ${f.from} ${fmtAbs(f.amount)}`));
+    }
+    if (winner.bank) {
+      lines.push("");
+      lines.push(`你的收款帳戶：${winner.bank}`);
+    }
+    const text = lines.join("\n");
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setCopied("W:" + winner.label); setTimeout(() => setCopied(""), 2000); });
   };
 
   const startEdit = () => {
@@ -1553,9 +1587,16 @@ function TabSettle({ data, setData }) {
               const winnerDiff = p.amount - received;
               return (
                 <div key={i} style={{ marginBottom: 10 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, fontSize: 13 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontWeight: 600, fontSize: 13 }}>
                     <span>{p.label}{p.splittable && <span style={{ fontSize: 10, color: C.dim, marginLeft: 4 }}>(可拆)</span>}</span>
-                    <span style={{ fontFamily: "monospace", color: C.green }}>+{fmtAbs(p.amount)}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontFamily: "monospace", color: C.green }}>+{fmtAbs(p.amount)}</span>
+                      <button onClick={() => copyWinner(p)} title="複製收款通知"
+                        style={{ background: "transparent", border: `1px solid ${C.border}`, color: copied === "W:" + p.label ? C.green : C.dim,
+                          padding: "2px 7px", borderRadius: 3, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>
+                        {copied === "W:" + p.label ? "✅" : "📋"}
+                      </button>
+                    </span>
                   </div>
                   {p.bank && <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim }}>{p.bank}</div>}
                   {editMode && (
@@ -1718,10 +1759,9 @@ function TabCumul({ data }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 11, marginBottom: 22 }}>
         {[
           { label: "場次", value: filteredSessions.length, color: C.gold },
-          { label: "人數",  value: rows.length, color: C.blue },
-          { label: "最大贏家", value: rows[0]?.name || "-", color: C.green },
-          { label: "最大輸家", value: rows.length ? rows[rows.length - 1].name : "-", color: C.red },
-          { label: "🐲 怪物王", value: bonusKing ? `${bonusKing.name} ×${bonusKing.count}` : "-", color: C.goldLight },
+          { label: "⚡️ 怪物電力公司", value: bonusKing ? `${bonusKing.name} ×${bonusKing.count}` : "-", color: C.goldLight },
+          { label: "🏆 頭號公敵", value: rows[0]?.name || "-", color: C.green },
+          { label: "💸 深海明珠", value: rows.length ? rows[rows.length - 1].name : "-", color: C.red },
         ].map((s, i) => (
           <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "13px 15px", textAlign: "center" }}>
             <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.13em", marginBottom: 6 }}>{s.label}</div>
