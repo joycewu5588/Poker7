@@ -1606,12 +1606,19 @@ function TabCumul({ data }) {
   filteredSessions.forEach(s => s.players.forEach(p => {
     if (p.type === "dealer") return;
     const k = resolveId(p.name, members);
-    if (!map[k]) map[k] = { name: dispName(p.name, members), count: 0, total: 0, best: -Infinity, worst: Infinity };
+    if (!map[k]) map[k] = { id: k, name: dispName(p.name, members), count: 0, total: 0, best: -Infinity, worst: Infinity };
     map[k].count++; map[k].total += p.amount;
     if (p.amount > map[k].best) map[k].best = p.amount;
     if (p.amount < map[k].worst) map[k].worst = p.amount;
   }));
-  const rows = Object.values(map).sort((a, b) => b.total - a.total);
+  // 用「成員名單目前的身份」分流：member → 排行榜，其他（guest/dealer/venue/查無）→ 來賓區
+  const isCurrentMember = (id) => {
+    const m = members.find(x => x.id === id);
+    return m && m.type === "member";
+  };
+  const allRows = Object.values(map);
+  const rows = allRows.filter(r => isCurrentMember(r.id)).sort((a, b) => b.total - a.total);
+  const guestRows = allRows.filter(r => !isCurrentMember(r.id)).sort((a, b) => b.total - a.total);
 
   // ─── 每季冠軍（依目前選的年份，算出該年 4 季各自的冠軍）───
   const champYear = filterYear === "all" ? currentYear : filterYear;
@@ -1626,6 +1633,7 @@ function TabCumul({ data }) {
     qSessions.forEach(s => s.players.forEach(p => {
       if (p.type === "dealer") return;
       const k = resolveId(p.name, members);
+      if (!isCurrentMember(k)) return; // 只算目前是「成員」的人
       if (!qMap[k]) qMap[k] = { name: dispName(p.name, members), total: 0 };
       qMap[k].total += p.amount;
     }));
@@ -1732,6 +1740,34 @@ function TabCumul({ data }) {
           </tbody>
         </table>
       </div>
+
+      {/* 來賓紀錄（不佔排名） */}
+      {guestRows.length > 0 && (
+        <div style={{ marginTop: 26 }}>
+          <div style={{ fontSize: 12, color: C.dim, letterSpacing: "0.1em", marginBottom: 10, fontFamily: "monospace" }}>
+            👤 來賓紀錄（不列入排名）
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, opacity: 0.75 }}>
+              <thead>
+                <tr>{["姓名","出席","累計輸贏","每場平均"].map(h => (
+                  <th key={h} style={{ textAlign: "left", padding: "8px 12px", borderBottom: `1px solid ${C.border}`, color: C.dim, fontSize: 11, fontWeight: 400, letterSpacing: "0.1em", fontFamily: "monospace" }}>{h}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {guestRows.map((r, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <td style={{ padding: "7px 12px" }}>{r.name} <span style={{ fontSize: 10, color: C.dim }}>客</span></td>
+                    <td style={{ padding: "7px 12px", fontFamily: "monospace" }}>{r.count}</td>
+                    <td style={{ padding: "7px 12px", fontFamily: "monospace", fontWeight: 700, color: r.total >= 0 ? C.green : C.red }}>{fmt(r.total)}</td>
+                    <td style={{ padding: "7px 12px", fontFamily: "monospace", color: (r.count > 0 ? r.total / r.count : 0) >= 0 ? C.green : C.red }}>{r.count > 0 ? fmt(Math.round(r.total / r.count)) : "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
