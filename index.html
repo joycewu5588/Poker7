@@ -1242,7 +1242,7 @@ function TabSettle({ data, setData }) {
     return list;
   })() : [];
 
-  const copyBill = (entry) => {
+  const buildLoserText = (entry) => {
     const lines = [`${s.date} 結算帳單`, ""];
     entry.pays.forEach(p => {
       lines.push(`${p.toLabel} +${fmtAbs(p.amount)}`);
@@ -1250,12 +1250,16 @@ function TabSettle({ data, setData }) {
       lines.push("");
     });
     lines.push(`合計：-${fmtAbs(entry.total)}`);
-    const text = lines.join("\n");
+    return lines.join("\n");
+  };
+
+  const copyBill = (entry) => {
+    const text = buildLoserText(entry);
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setCopied(entry.loserLabel); setTimeout(() => setCopied(""), 2000); });
   };
 
-  // 複製「贏家收款通知」：列出誰會匯多少給這位收款人
-  const copyWinner = (winner) => {
+  // 贏家收款通知文字
+  const buildWinnerText = (winner) => {
     const froms = [];
     Object.values(displayMap).forEach(entry => {
       entry.pays.forEach(pay => {
@@ -1265,19 +1269,23 @@ function TabSettle({ data, setData }) {
         }
       });
     });
-    const lines = [`${s.date} 收款通知`, ""];
-    lines.push(`${winner.label} 本場共收 +${fmtAbs(winner.amount)}`);
+    const lines = [`${s.date} `, ""];
+    lines.push(`${winner.label} +${fmtAbs(winner.amount)}`);
     lines.push("");
-    if (froms.length) {
-      lines.push("以下玩家會匯給你：");
-      froms.forEach(f => lines.push(`• ${f.from} ${fmtAbs(f.amount)}`));
-    }
-    if (winner.bank) {
-      lines.push("");
-      lines.push(`你的收款帳戶：${winner.bank}`);
-    }
-    const text = lines.join("\n");
+    lines.push("這次匯款會是");
+    lines.push("");
+    froms.forEach(f => lines.push(`• ${f.from} ${fmtAbs(f.amount)}`));
+    return lines.join("\n");
+  };
+
+  const copyWinner = (winner) => {
+    const text = buildWinnerText(winner);
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setCopied("W:" + winner.label); setTimeout(() => setCopied(""), 2000); });
+  };
+
+  // 一鍵開 LINE 分享（帶入文字，跳出選好友畫面）
+  const shareLine = (text) => {
+    window.open("https://line.me/R/share?text=" + encodeURIComponent(text), "_blank");
   };
 
   const startEdit = () => {
@@ -1568,6 +1576,11 @@ function TabSettle({ data, setData }) {
                       <Btn variant="secondary" onClick={() => copyBill(entry)} style={{ fontSize: 11, padding: "4px 10px" }}>
                         {copied === entry.loserLabel ? "✅ 已複製" : "📋 複製帳單"}
                       </Btn>
+                      <button onClick={() => shareLine(buildLoserText(entry))}
+                        style={{ background: "#06C755", border: "none", color: "#fff", marginLeft: 6,
+                          padding: "5px 12px", borderRadius: 4, cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                        LINE
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1595,6 +1608,11 @@ function TabSettle({ data, setData }) {
                         style={{ background: "transparent", border: `1px solid ${C.border}`, color: copied === "W:" + p.label ? C.green : C.dim,
                           padding: "2px 7px", borderRadius: 3, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>
                         {copied === "W:" + p.label ? "✅" : "📋"}
+                      </button>
+                      <button onClick={() => shareLine(buildWinnerText(p))} title="LINE 通知"
+                        style={{ background: "#06C755", border: "none", color: "#fff",
+                          padding: "2px 8px", borderRadius: 3, cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                        LINE
                       </button>
                     </span>
                   </div>
