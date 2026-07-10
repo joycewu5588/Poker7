@@ -1753,7 +1753,7 @@ function TabCumul({ data }) {
     return { q, champ: sorted[0] || null, loser: sorted.length > 1 ? sorted[sorted.length - 1] : null, sessionCount: qSessions.length };
   });
 
-  // 年度輸贏王（整年）
+  // 年度戰鬥紀錄（整年）
   const yearStat = (() => {
     const ySessions = sessions.filter(s => (s.date || "").slice(0, 4) === champYear);
     const yMap = {};
@@ -1810,10 +1810,10 @@ function TabCumul({ data }) {
         </div>
       </div>
 
-      {/* 每季輸贏王 */}
+      {/* 每季戰鬥紀錄 */}
       <div style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 12, color: C.gold, letterSpacing: "0.1em", marginBottom: 10, fontFamily: "monospace" }}>
-          🏆 {champYear} 每季輸贏王
+          🏆 {champYear} 每季戰鬥紀錄
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, maxWidth: 520 }}>
           {/* 年度卡（跨兩欄置頂） */}
