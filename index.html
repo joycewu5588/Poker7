@@ -2371,10 +2371,10 @@ function TabBackup({ data, setData }) {
       {/* 重置為內建資料 */}
       <div style={{ background: C.surface, border: `1px solid ${C.red}55`, borderRadius: 8, padding: 18, marginBottom: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: C.red, marginBottom: 6 }}>
-          🔧 重置為內建預設資料（4場 + 20成員）
+          🔧 重置為內建預設資料（{USER_DEFAULT_DATA.sessions.length}場 + {USER_DEFAULT_DATA.members.length}成員）
         </div>
         <div style={{ fontSize: 11, color: C.dim, marginBottom: 10, lineHeight: 1.5 }}>
-          ⚠️ 用於修復 Firebase 上的損壞資料 — 會把當前 Firebase 上的資料蓋掉，恢復成 HTML 內建的乾淨版本（包含 4 場、20 成員、1 筆公積金支出）。如果你看到亂碼或資料不對，按這個。
+          ⚠️ 用於修復 Firebase 上的損壞資料 — 會把當前 Firebase 上的資料蓋掉，恢復成 HTML 內建的版本（包含 {USER_DEFAULT_DATA.sessions.length} 場、{USER_DEFAULT_DATA.members.length} 成員、{USER_DEFAULT_DATA.expenses.length} 筆公積金支出，內建資料最後更新到 {USER_DEFAULT_DATA.sessions.length ? USER_DEFAULT_DATA.sessions[USER_DEFAULT_DATA.sessions.length - 1].date : "-"}）。如果你看到亂碼或資料不對，按這個。
         </div>
         <Btn variant="danger" onClick={async () => {
           if (!(await dialog.confirm("確定用內建資料覆蓋當前 Firebase？\n\n這會清除所有目前的資料！如果你最近有新增場次，務必先複製 JSON 備份！"))) return;
