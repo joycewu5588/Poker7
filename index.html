@@ -1252,7 +1252,13 @@ function TabNew({ data, setData, editingId, clearEditing }) {
 function TabSettle({ data, setData }) {
   const dialog = useDialog();
   const { sessions, members } = data;
-  const [selId, setSelId] = useState("");
+  // 進頁自動載入：最新「未結算」場次，沒有就最新一場
+  const [selId, setSelId] = useState(() => {
+    const sorted = [...data.sessions].sort((a, b) => a.date < b.date ? -1 : 1);
+    const unsettled = sorted.filter(x => !x.settled);
+    const pick = unsettled.length ? unsettled[unsettled.length - 1] : sorted[sorted.length - 1];
+    return pick ? pick.id : "";
+  });
   const [pairs, setPairs] = useState([]); // [[id1,id2],...]
   const [newPair, setNewPair] = useState(["", "", ""]);
   const [copied, setCopied] = useState("");
@@ -1483,12 +1489,24 @@ function TabSettle({ data, setData }) {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <select value={selId} onChange={e => { setSelId(e.target.value); setPairs([]); }}
-          style={{ background: C.surface2, border: `1px solid ${C.border}`, color: C.text, padding: "7px 12px", borderRadius: 4, fontSize: 13, outline: "none", maxWidth: 260 }}>
-          <option value="">-- 選擇場次 --</option>
-          {[...sessions].reverse().map(s => <option key={s.id} value={s.id}>{s.date} ({s.hours}hr){s.customSettlement ? " ✏️" : ""}</option>)}
-        </select>
+      {/* 場次按鈕列表（最新在前） */}
+      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 16 }}>
+        {[...sessions].reverse().map(sess => {
+          const active = sess.id === selId;
+          return (
+            <button key={sess.id} onClick={() => { setSelId(sess.id); setPairs([]); }}
+              style={{
+                padding: "7px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12,
+                fontFamily: "monospace", fontWeight: active ? 700 : 400,
+                background: active ? C.gold : C.surface2,
+                color: active ? "#000" : (sess.settled ? C.text : C.red),
+                border: `1px solid ${active ? C.gold : (sess.settled ? C.border : C.red + "88")}`,
+                whiteSpace: "nowrap",
+              }}>
+              {sess.date.slice(5)}{sess.customSettlement ? " ✏️" : ""}{!sess.settled ? " ⚠️" : ""}
+            </button>
+          );
+        })}
       </div>
 
       {s && <>
@@ -1808,9 +1826,6 @@ function TabCumul({ data }) {
     <div>
       {/* 戰鬥紀錄 */}
       <div style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 12, color: C.gold, letterSpacing: "0.1em", marginBottom: 10, fontFamily: "monospace" }}>
-          🏆 {champYear} 戰鬥紀錄
-        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9, maxWidth: 520 }}>
           {/* 年度卡：頭號公敵 / 深海明珠 / 怪物磁鐵 */}
           <div style={{
@@ -2454,8 +2469,8 @@ function TabBackup({ data, setData }) {
 const TABS = [
   { id: "new",      label: "➕ 新增" },
   { id: "records",  label: "📋 場次" },
-  { id: "settle",   label: "💸 結算" },
-  { id: "cumul",    label: "📊 統計" },
+  { id: "settle",   label: "📝 帳款結算" },
+  { id: "cumul",    label: "🗡️ 戰鬥紀錄" },
   { id: "reserve",  label: "🏦 公積金" },
   { id: "bonus",    label: "🃏 特殊牌" },
   { id: "members",  label: "👥 成員" },
