@@ -1261,6 +1261,7 @@ function TabSettle({ data, setData }) {
   });
   const [pairs, setPairs] = useState([]); // [[id1,id2],...]
   const [newPair, setNewPair] = useState(["", "", ""]);
+  const [showAllSess, setShowAllSess] = useState(false);
   const [copied, setCopied] = useState("");
   const [editMode, setEditMode] = useState(false);
   const [editedMap, setEditedMap] = useState(null); // { loserKey: { ...entry, pays: [...] } }
@@ -1489,25 +1490,44 @@ function TabSettle({ data, setData }) {
 
   return (
     <div>
-      {/* 場次按鈕列表（最新在前） */}
-      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 16 }}>
-        {[...sessions].reverse().map(sess => {
-          const active = sess.id === selId;
-          return (
-            <button key={sess.id} onClick={() => { setSelId(sess.id); setPairs([]); }}
-              style={{
-                padding: "7px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12,
-                fontFamily: "monospace", fontWeight: active ? 700 : 400,
-                background: active ? C.gold : C.surface2,
-                color: active ? "#000" : (sess.settled ? C.text : C.red),
-                border: `1px solid ${active ? C.gold : (sess.settled ? C.border : C.red + "88")}`,
-                whiteSpace: "nowrap",
-              }}>
-              {sess.date.slice(5)}{sess.customSettlement ? " ✏️" : ""}{!sess.settled ? " ⚠️" : ""}
-            </button>
-          );
-        })}
-      </div>
+      {/* 場次按鈕列表（最新在前；預設只顯示最近 8 場） */}
+      {(() => {
+        const sessList = [...sessions].reverse();
+        const RECENT = 3;
+        let visible = showAllSess ? sessList : sessList.slice(0, RECENT);
+        // 目前選的場次如果被收合，仍要顯示
+        if (!showAllSess && selId && !visible.some(x => x.id === selId)) {
+          const cur = sessList.find(x => x.id === selId);
+          if (cur) visible = [...visible, cur];
+        }
+        return (
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 16 }}>
+            {visible.map(sess => {
+              const active = sess.id === selId;
+              return (
+                <button key={sess.id} onClick={() => { setSelId(sess.id); setPairs([]); }}
+                  style={{
+                    padding: "7px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12,
+                    fontFamily: "monospace", fontWeight: active ? 700 : 400,
+                    background: active ? C.gold : C.surface2,
+                    color: active ? "#000" : (sess.settled ? C.text : C.red),
+                    border: `1px solid ${active ? C.gold : (sess.settled ? C.border : C.red + "88")}`,
+                    whiteSpace: "nowrap",
+                  }}>
+                  {sess.date.slice(5)}{sess.customSettlement ? " ✏️" : ""}{!sess.settled ? " ⚠️" : ""}
+                </button>
+              );
+            })}
+            {sessList.length > RECENT && (
+              <button onClick={() => setShowAllSess(v => !v)}
+                style={{ padding: "7px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12,
+                  background: "transparent", color: C.dim, border: `1px dashed ${C.border}`, whiteSpace: "nowrap" }}>
+                {showAllSess ? "收合 ▴" : `更早場次 (${sessList.length - RECENT}) ▾`}
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {s && <>
         {/* 手動結算狀態提示 */}
