@@ -2028,6 +2028,19 @@ function TabReserve({ data, setData }) {
   const items = events.map(ev => { run += ev.amount; return { ...ev, run }; });
   const total = run;
 
+  // ─── 成本分析 ───
+  const nSess = sessions.length || 1;
+  const sumOf = k => sessions.reduce((a, s) => a + (s[k] || 0), 0);
+  const cVenue = sumOf("venueFee");
+  const cWage = sumOf("dealerWage");
+  const cHelper = sumOf("helperTip");
+  const cMeal = expenses.filter(e => (e.desc || "").includes("餐費")).reduce((a, e) => a + e.amount, 0);
+  const cOther = expenses.reduce((a, e) => a + e.amount, 0) - cMeal;
+  const costTotal = cVenue + cWage + cHelper + cMeal + cOther;
+  const refJackpot = sumOf("jackpot");
+  const refWater = sumOf("totalWater");
+  const avg = v => Math.round(v / nSess);
+
   const saveExpense = () => {
     if (!form.date || !form.amount) { dialog.alert("請填日期和金額"); return; }
     const newExp = { id: "e" + Date.now(), date: form.date, amount: parseInt(form.amount) || 0, desc: form.desc };
@@ -2074,6 +2087,70 @@ function TabReserve({ data, setData }) {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* ─── 成本分析 ─── */}
+      <div style={{ marginTop: 30, marginBottom: 20 }}>
+        <SectionHeader>💰 成本分析</SectionHeader>
+        <div style={{ fontSize: 11, color: C.dim, margin: "8px 0 12px", fontFamily: "monospace" }}>
+          {nSess} 場{sessions.length ? `（${sessions[0].date} ~ ${sessions[sessions.length - 1].date}）` : ""}
+        </div>
+
+        {/* 總成本大字 */}
+        <div style={{ background: "linear-gradient(135deg,rgba(216,112,112,.14),rgba(216,112,112,.04))",
+          border: `1px solid ${C.red}77`, borderRadius: 8, padding: "14px 18px", marginBottom: 14,
+          display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.14em", marginBottom: 4 }}>總支出</div>
+            <div style={{ fontFamily: "monospace", fontSize: 24, fontWeight: 700, color: C.red }}>${fmtAbs(costTotal)}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.14em", marginBottom: 4 }}>平均每場</div>
+            <div style={{ fontFamily: "monospace", fontSize: 24, fontWeight: 700, color: C.goldLight }}>${fmtAbs(avg(costTotal))}</div>
+          </div>
+        </div>
+
+        {/* 明細 */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", marginBottom: 12 }}>
+          {[
+            { label: "🏠 場地費", v: cVenue },
+            { label: "👔 Dealer 薪", v: cWage },
+            { label: "🧑‍💼 管家小費", v: cHelper },
+            { label: "🍱 餐費（公積金付）", v: cMeal },
+            { label: "📦 其他支出", v: cOther },
+          ].map((r, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "9px 0", borderBottom: i < 4 ? `1px solid ${C.border}` : "none" }}>
+              <span style={{ fontSize: 13 }}>{r.label}</span>
+              <span style={{ display: "flex", gap: 14, alignItems: "baseline" }}>
+                <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.red }}>{fmtAbs(r.v)}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 11, color: C.dim, minWidth: 62, textAlign: "right" }}>／場 {fmtAbs(avg(r.v))}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* 參考數據（不計入成本） */}
+        <div style={{ background: C.surface2, border: `1px dashed ${C.border}`, borderRadius: 8, padding: "6px 14px" }}>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.1em", padding: "8px 0 4px" }}>參考（不計入總支出）</div>
+          {[
+            { label: "💰 水錢收入", v: refWater, color: C.gold },
+            { label: "🎰 Jackpot", v: refJackpot, color: C.muted },
+          ].map((r, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "9px 0", borderTop: `1px solid ${C.border}` }}>
+              <span style={{ fontSize: 13, color: C.dim }}>{r.label}</span>
+              <span style={{ display: "flex", gap: 14, alignItems: "baseline" }}>
+                <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: r.color }}>{fmtAbs(r.v)}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 11, color: C.dim, minWidth: 62, textAlign: "right" }}>／場 {fmtAbs(avg(r.v))}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ fontSize: 11, color: C.dim, marginTop: 10, lineHeight: 1.6 }}>
+          水錢收入 {fmtAbs(refWater)} － 總支出 {fmtAbs(costTotal)} ＝ <span style={{ color: C.goldLight, fontWeight: 700 }}>{fmt(refWater - costTotal)}</span>（即公積金餘額）
+        </div>
       </div>
 
       <Modal open={modal} title="新增公積金支出" onClose={() => setModal(false)} onSave={saveExpense}>
