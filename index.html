@@ -1368,15 +1368,15 @@ function TabSettle({ data, setData }) {
   };
 
   // 新增一筆轉帳到某輸家
-  const addPay = (loserKey, toId) => {
-    if (!toId) return;
-    const poolItem = pool.find(p => p.id === toId);
+  const addPay = (loserKey, poolIdx) => {
+    if (poolIdx === "" || poolIdx === null || poolIdx === undefined) return;
+    const poolItem = pool[parseInt(poolIdx)];
     if (!poolItem) return;
     setEditedMap(m => {
       const next = Object.assign({}, m);
       const entry = Object.assign({}, next[loserKey]);
-      // 已經存在則不重複加
-      if (entry.pays.some(p => p.toId === toId)) return m;
+      // 同一個收款對象（id+label 都相同）已存在則不重複加
+      if (entry.pays.some(p => p.toId === poolItem.id && p.toLabel === poolItem.label)) return m;
       entry.pays = [...entry.pays, { toLabel: poolItem.label, toId: poolItem.id, toBank: poolItem.bank, amount: "" }];
       next[loserKey] = entry;
       return next;
@@ -1612,7 +1612,9 @@ function TabSettle({ data, setData }) {
               const currentSum = entry.pays.reduce((a, p) => a + (parseInt(p.amount) || 0), 0);
               const diff = entry.total - currentSum;
               // 收款人下拉：列出所有 pool 中尚未在此 entry 的人
-              const availableToAdd = pool.filter(p => !entry.pays.some(pay => pay.toId === p.id));
+              const availableToAdd = pool
+                .map((p, idx) => ({ ...p, _idx: idx }))
+                .filter(p => !entry.pays.some(pay => pay.toId === p.id && pay.toLabel === p.label));
               return (
                 <div key={key} style={{ background: C.surface2, border: `1px solid ${editMode && diff !== 0 ? C.red : C.border}`, borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
                   <div style={{ padding: "8px 12px", background: "#e0555511", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1649,7 +1651,7 @@ function TabSettle({ data, setData }) {
                           padding: "4px 8px", borderRadius: 3, fontSize: 12, fontFamily: "inherit", outline: "none" }}>
                         <option value="">＋ 新增收款人</option>
                         {availableToAdd.map(p => (
-                          <option key={p.id} value={p.id}>{p.label}（應收 {fmtAbs(p.amount)}）</option>
+                          <option key={p._idx} value={p._idx}>{p.label}（應收 {fmtAbs(p.amount)}）</option>
                         ))}
                       </select>
                     </div>
