@@ -1405,29 +1405,31 @@ function TabSettle({ data, setData }) {
     });
 
     // 驗證2：每個贏家收到總額 = 該贏家應得（從 pool）
-    // 統計所有 pays 中每個 toId 的總收款
+    // 統計所有 pays 中每個收款方（id+名稱）的總收款
+    // 用複合鍵：同一個人可能同時是玩家與公積金，必須分開算
     const winnerReceived = {};
     Object.values(editedMap).forEach(entry => {
       entry.pays.forEach(p => {
         const amt = parseInt(p.amount) || 0;
-        if (!winnerReceived[p.toId]) winnerReceived[p.toId] = { label: p.toLabel, sum: 0 };
-        winnerReceived[p.toId].sum += amt;
+        const k = p.toId + "||" + p.toLabel;
+        if (!winnerReceived[k]) winnerReceived[k] = { label: p.toLabel, id: p.toId, sum: 0 };
+        winnerReceived[k].sum += amt;
       });
     });
     const winnerErrors = [];
     pool.forEach(p => {
-      const recv = winnerReceived[p.id] ? winnerReceived[p.id].sum : 0;
+      const k = p.id + "||" + p.label;
+      const recv = winnerReceived[k] ? winnerReceived[k].sum : 0;
       if (recv !== p.amount) {
         winnerErrors.push(`贏家 ${p.label}：應收 ${p.amount}，目前 ${recv}（差 ${p.amount - recv}）`);
       }
     });
-    // 也檢查公積金補差（res < 0 時是輸家）— 已含在 editedMap 裡
-    // 但要檢查 winnerReceived 中沒有不該收的人
-    Object.entries(winnerReceived).forEach(([id, info]) => {
-      const poolMatch = pool.find(p => p.id === id);
+    // 檢查 winnerReceived 中沒有不該收的人
+    Object.values(winnerReceived).forEach(info => {
+      const poolMatch = pool.find(p => p.id === info.id && p.label === info.label);
       if (!poolMatch) {
         // 可能是公積金補差(res < 0)，這是負池子，跳過
-        if (id === "Joyce" && res < 0) return;
+        if (info.id === "Joyce" && res < 0) return;
         winnerErrors.push(`贏家 ${info.label}：不在本場收款方名單`);
       }
     });
@@ -1687,7 +1689,7 @@ function TabSettle({ data, setData }) {
               let received = 0;
               Object.values(displayMap).forEach(entry => {
                 entry.pays.forEach(pay => {
-                  if (pay.toId === p.id) received += (parseInt(pay.amount) || 0);
+                  if (pay.toId === p.id && pay.toLabel === p.label) received += (parseInt(pay.amount) || 0);
                 });
               });
               const winnerDiff = p.amount - received;
