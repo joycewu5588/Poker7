@@ -1296,11 +1296,13 @@ function TabSettle({ data, setData }) {
 
   // 合併名稱只取第一個人（Gary+Joyce+管家 → Gary）
   const firstName = (label) => String(label || "").split("+")[0];
+  // 判斷是否同一個收款對象：id 相同，且名稱相同或首名相同（相容舊存檔）
+  const samePayee = (a, b) => a.id === b.id && (a.label === b.label || firstName(a.label) === firstName(b.label));
 
   const buildLoserText = (entry) => {
-    const lines = [`${s.date} ${firstName(entry.loserLabel)} 結算帳單`, ""];
+    const lines = [`${s.date} ${entry.loserLabel} 結算帳單`, ""];
     entry.pays.forEach(p => {
-      lines.push(`${firstName(p.toLabel)} +${fmtAbs(p.amount)}`);
+      lines.push(`${p.toLabel} +${fmtAbs(p.amount)}`);
       if (p.toBank) lines.push(p.toBank);
       lines.push("");
     });
@@ -1318,14 +1320,14 @@ function TabSettle({ data, setData }) {
     const froms = [];
     Object.values(displayMap).forEach(entry => {
       entry.pays.forEach(pay => {
-        if (pay.toId === winner.id && pay.toLabel === winner.label) {
+        if (samePayee({ id: pay.toId, label: pay.toLabel }, winner)) {
           const amt = parseInt(pay.amount) || 0;
           if (amt > 0) froms.push({ from: entry.loserLabel, amount: amt });
         }
       });
     });
     const lines = [`${s.date} `, ""];
-    lines.push(`${firstName(winner.label)} +${fmtAbs(winner.amount)}`);
+    lines.push(`${winner.label} +${fmtAbs(winner.amount)}`);
     lines.push("");
     lines.push("這次匯款會是");
     lines.push("");
@@ -1379,14 +1381,14 @@ function TabSettle({ data, setData }) {
       const next = Object.assign({}, m);
       const entry = Object.assign({}, next[loserKey]);
       // 同一個收款對象（id+label 都相同）已存在則不重複加
-      if (entry.pays.some(p => p.toId === poolItem.id && p.toLabel === poolItem.label)) return m;
+      if (entry.pays.some(p => samePayee({ id: p.toId, label: p.toLabel }, poolItem))) return m;
 
       // 自動帶入金額：輸家還沒付的 vs 這位贏家還沒收齊的，取小值
       const paidByLoser = entry.pays.reduce((a, p) => a + (parseInt(p.amount) || 0), 0);
       const loserRemain = Math.max(0, (entry.total || 0) - paidByLoser);
       let winnerGot = 0;
       Object.values(m).forEach(e => e.pays.forEach(p => {
-        if (p.toId === poolItem.id && p.toLabel === poolItem.label) winnerGot += (parseInt(p.amount) || 0);
+        if (samePayee({ id: p.toId, label: p.toLabel }, poolItem)) winnerGot += (parseInt(p.amount) || 0);
       }));
       const winnerRemain = Math.max(0, (poolItem.amount || 0) - winnerGot);
       const suggest = Math.min(loserRemain, winnerRemain);
@@ -1425,14 +1427,14 @@ function TabSettle({ data, setData }) {
     Object.values(editedMap).forEach(entry => {
       entry.pays.forEach(p => {
         const amt = parseInt(p.amount) || 0;
-        const k = p.toId + "||" + p.toLabel;
+        const k = p.toId + "||" + firstName(p.toLabel);
         if (!winnerReceived[k]) winnerReceived[k] = { label: p.toLabel, id: p.toId, sum: 0 };
         winnerReceived[k].sum += amt;
       });
     });
     const winnerErrors = [];
     pool.forEach(p => {
-      const k = p.id + "||" + p.label;
+      const k = p.id + "||" + firstName(p.label);
       const recv = winnerReceived[k] ? winnerReceived[k].sum : 0;
       if (recv !== p.amount) {
         winnerErrors.push(`贏家 ${p.label}：應收 ${p.amount}，目前 ${recv}（差 ${p.amount - recv}）`);
@@ -1440,7 +1442,7 @@ function TabSettle({ data, setData }) {
     });
     // 檢查 winnerReceived 中沒有不該收的人
     Object.values(winnerReceived).forEach(info => {
-      const poolMatch = pool.find(p => p.id === info.id && p.label === info.label);
+      const poolMatch = pool.find(p => samePayee(p, info));
       if (!poolMatch) {
         // 可能是公積金補差(res < 0)，這是負池子，跳過
         if (info.id === "Joyce" && res < 0) return;
@@ -1630,7 +1632,7 @@ function TabSettle({ data, setData }) {
               // 收款人下拉：列出所有 pool 中尚未在此 entry 的人
               const availableToAdd = pool
                 .map((p, idx) => ({ ...p, _idx: idx }))
-                .filter(p => !entry.pays.some(pay => pay.toId === p.id && pay.toLabel === p.label));
+                .filter(p => !entry.pays.some(pay => samePayee({ id: pay.toId, label: pay.toLabel }, p)));
               return (
                 <div key={key} style={{ background: C.surface2, border: `1px solid ${editMode && diff !== 0 ? C.red : C.border}`, borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
                   <div style={{ padding: "8px 12px", background: "#e0555511", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1669,7 +1671,7 @@ function TabSettle({ data, setData }) {
                         {availableToAdd.map(p => {
                           let got = 0;
                           Object.values(editedMap).forEach(e => e.pays.forEach(pay => {
-                            if (pay.toId === p.id && pay.toLabel === p.label) got += (parseInt(pay.amount) || 0);
+                            if (samePayee({ id: pay.toId, label: pay.toLabel }, p)) got += (parseInt(pay.amount) || 0);
                           }));
                           const remain = Math.max(0, p.amount - got);
                           return <option key={p._idx} value={p._idx}>{p.label}（還差 {fmtAbs(remain)}）</option>;
@@ -1708,7 +1710,7 @@ function TabSettle({ data, setData }) {
               let received = 0;
               Object.values(displayMap).forEach(entry => {
                 entry.pays.forEach(pay => {
-                  if (pay.toId === p.id && pay.toLabel === p.label) received += (parseInt(pay.amount) || 0);
+                  if (samePayee({ id: pay.toId, label: pay.toLabel }, p)) received += (parseInt(pay.amount) || 0);
                 });
               });
               const winnerDiff = p.amount - received;
