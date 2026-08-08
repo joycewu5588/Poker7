@@ -1294,10 +1294,13 @@ function TabSettle({ data, setData }) {
     return list;
   })() : [];
 
+  // 合併名稱只取第一個人（Gary+Joyce+管家 → Gary）
+  const firstName = (label) => String(label || "").split("+")[0];
+
   const buildLoserText = (entry) => {
-    const lines = [`${s.date} ${entry.loserLabel} 結算帳單`, ""];
+    const lines = [`${s.date} ${firstName(entry.loserLabel)} 結算帳單`, ""];
     entry.pays.forEach(p => {
-      lines.push(`${p.toLabel} +${fmtAbs(p.amount)}`);
+      lines.push(`${firstName(p.toLabel)} +${fmtAbs(p.amount)}`);
       if (p.toBank) lines.push(p.toBank);
       lines.push("");
     });
@@ -1322,11 +1325,11 @@ function TabSettle({ data, setData }) {
       });
     });
     const lines = [`${s.date} `, ""];
-    lines.push(`${winner.label} +${fmtAbs(winner.amount)}`);
+    lines.push(`${firstName(winner.label)} +${fmtAbs(winner.amount)}`);
     lines.push("");
     lines.push("這次匯款會是");
     lines.push("");
-    froms.forEach(f => lines.push(`• ${f.from} ${fmtAbs(f.amount)}`));
+    froms.forEach(f => lines.push(`• ${firstName(f.from)} ${fmtAbs(f.amount)}`));
     return lines.join("\n");
   };
 
@@ -1377,7 +1380,18 @@ function TabSettle({ data, setData }) {
       const entry = Object.assign({}, next[loserKey]);
       // 同一個收款對象（id+label 都相同）已存在則不重複加
       if (entry.pays.some(p => p.toId === poolItem.id && p.toLabel === poolItem.label)) return m;
-      entry.pays = [...entry.pays, { toLabel: poolItem.label, toId: poolItem.id, toBank: poolItem.bank, amount: "" }];
+
+      // 自動帶入金額：輸家還沒付的 vs 這位贏家還沒收齊的，取小值
+      const paidByLoser = entry.pays.reduce((a, p) => a + (parseInt(p.amount) || 0), 0);
+      const loserRemain = Math.max(0, (entry.total || 0) - paidByLoser);
+      let winnerGot = 0;
+      Object.values(m).forEach(e => e.pays.forEach(p => {
+        if (p.toId === poolItem.id && p.toLabel === poolItem.label) winnerGot += (parseInt(p.amount) || 0);
+      }));
+      const winnerRemain = Math.max(0, (poolItem.amount || 0) - winnerGot);
+      const suggest = Math.min(loserRemain, winnerRemain);
+
+      entry.pays = [...entry.pays, { toLabel: poolItem.label, toId: poolItem.id, toBank: poolItem.bank, amount: suggest > 0 ? String(suggest) : "" }];
       next[loserKey] = entry;
       return next;
     });
@@ -1652,9 +1666,14 @@ function TabSettle({ data, setData }) {
                         style={{ flex: 1, background: C.surface, border: `1px solid ${C.gold}55`, color: C.goldLight,
                           padding: "4px 8px", borderRadius: 3, fontSize: 12, fontFamily: "inherit", outline: "none" }}>
                         <option value="">＋ 新增收款人</option>
-                        {availableToAdd.map(p => (
-                          <option key={p._idx} value={p._idx}>{p.label}（應收 {fmtAbs(p.amount)}）</option>
-                        ))}
+                        {availableToAdd.map(p => {
+                          let got = 0;
+                          Object.values(editedMap).forEach(e => e.pays.forEach(pay => {
+                            if (pay.toId === p.id && pay.toLabel === p.label) got += (parseInt(pay.amount) || 0);
+                          }));
+                          const remain = Math.max(0, p.amount - got);
+                          return <option key={p._idx} value={p._idx}>{p.label}（還差 {fmtAbs(remain)}）</option>;
+                        })}
                       </select>
                     </div>
                   )}
@@ -2022,6 +2041,7 @@ function TabReserve({ data, setData }) {
   const { sessions, expenses = [] } = data;
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({ date: "", amount: "", desc: "" });
+  const [showLedger, setShowLedger] = useState(false);
 
   const events = [
     ...sessions.map(s => ({ date: s.date, amount: calcReserve(s), note: s.note, kind: "session", id: s.id })),
@@ -2060,37 +2080,6 @@ function TabReserve({ data, setData }) {
           <div style={{ fontFamily: "monospace", fontSize: 28, fontWeight: 700, color: C.goldLight }}>${fmtAbs(total)}</div>
         </div>
         <Btn onClick={() => setModal(true)} style={{ alignSelf: "flex-end" }}>－ 新增支出</Btn>
-      </div>
-
-      <div style={{ maxWidth: 540 }}>
-        {items.map((it, i) => (
-          <div key={it.id} style={{ display: "flex", gap: 16 }}>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 16, flexShrink: 0 }}>
-              <div style={{ width: 10, height: 10, borderRadius: "50%", marginTop: 5, flexShrink: 0, border: `2px solid ${C.bg}`,
-                background: it.kind === "expense" ? C.blue : it.amount < 0 ? C.red : C.gold }} />
-              {i < items.length - 1 && <div style={{ width: 2, flex: 1, background: C.border, minHeight: 26 }} />}
-            </div>
-            <div style={{ paddingBottom: 20, flex: 1 }}>
-              <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim, marginBottom: 4 }}>
-                {it.date} {it.kind === "expense" && <span style={{ fontSize: 10, color: C.blue }}>[支出]</span>}
-              </div>
-              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 5, padding: "10px 12px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: it.amount >= 0 ? C.gold : C.red }}>{fmt(it.amount)}</span>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <span style={{ fontFamily: "monospace", fontSize: 12, color: C.dim }}>累計 {fmt(it.run)}</span>
-                    {it.kind === "expense" && (
-                      <button onClick={async () => {
-                        if (await dialog.confirm("刪除此支出？")) setData(d => ({ ...d, expenses: d.expenses.filter(e => e.id !== it.id) }));
-                      }} style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>✕</button>
-                    )}
-                  </div>
-                </div>
-                {it.note && <div style={{ fontSize: 11, color: C.dim, marginTop: 3 }}>📝 {it.note}</div>}
-              </div>
-            </div>
-          </div>
-        ))}
       </div>
 
       {/* ─── 成本分析 ─── */}
@@ -2152,6 +2141,50 @@ function TabReserve({ data, setData }) {
           水錢 {fmtAbs(refWater)} － 場地/薪/管家/公積金支出 {fmtAbs(costTotal - refJackpot)} ＝ <span style={{ color: C.goldLight, fontWeight: 700 }}>{fmt(refWater - costTotal + refJackpot)}</span>（公積金餘額）<br />
           <span style={{ color: C.muted }}>※ Jackpot {fmtAbs(refJackpot)} 已計入總支出，但不從公積金扣</span>
         </div>
+      </div>
+
+      {/* 收支明細（預設摺疊） */}
+      <div style={{ marginTop: 8 }}>
+        <button onClick={() => setShowLedger(v => !v)}
+          style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text,
+            padding: "9px 14px", borderRadius: 6, cursor: "pointer", fontSize: 13, fontFamily: "inherit",
+            display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <span>📜 收支明細（{items.length} 筆）</span>
+          <span style={{ color: C.dim, fontSize: 11 }}>{showLedger ? "收合 ▴" : "展開 ▾"}</span>
+        </button>
+        {showLedger && (
+        <div style={{ maxWidth: 540 }}>
+        {items.map((it, i) => (
+          <div key={it.id} style={{ display: "flex", gap: 16 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 16, flexShrink: 0 }}>
+              <div style={{ width: 10, height: 10, borderRadius: "50%", marginTop: 5, flexShrink: 0, border: `2px solid ${C.bg}`,
+                background: it.kind === "expense" ? C.blue : it.amount < 0 ? C.red : C.gold }} />
+              {i < items.length - 1 && <div style={{ width: 2, flex: 1, background: C.border, minHeight: 26 }} />}
+            </div>
+            <div style={{ paddingBottom: 20, flex: 1 }}>
+              <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim, marginBottom: 4 }}>
+                {it.date} {it.kind === "expense" && <span style={{ fontSize: 10, color: C.blue }}>[支出]</span>}
+              </div>
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 5, padding: "10px 12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: it.amount >= 0 ? C.gold : C.red }}>{fmt(it.amount)}</span>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, color: C.dim }}>累計 {fmt(it.run)}</span>
+                    {it.kind === "expense" && (
+                      <button onClick={async () => {
+                        if (await dialog.confirm("刪除此支出？")) setData(d => ({ ...d, expenses: d.expenses.filter(e => e.id !== it.id) }));
+                      }} style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>✕</button>
+                    )}
+                  </div>
+                </div>
+                {it.note && <div style={{ fontSize: 11, color: C.dim, marginTop: 3 }}>📝 {it.note}</div>}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+        )}
       </div>
 
       <Modal open={modal} title="新增公積金支出" onClose={() => setModal(false)} onSave={saveExpense}>
