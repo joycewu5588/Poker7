@@ -1282,6 +1282,10 @@ function TabSettle({ data, setData }) {
     setEditMode(false);
     setEditedMap(null);
     setSaveMsg("");
+    // 還原這場存檔時用的共算配對，讓右側收款方與左側結算一致
+    const sess = sessions.find(x => x.id === selId);
+    const savedPairs = sess && sess.customSettlement && sess.customSettlement.pairs;
+    setPairs(Array.isArray(savedPairs) ? savedPairs : []);
   }, [selId]);
 
   const sessionPlayers = s ? (() => {
@@ -1523,7 +1527,7 @@ function TabSettle({ data, setData }) {
             {visible.map(sess => {
               const active = sess.id === selId;
               return (
-                <button key={sess.id} onClick={() => { setSelId(sess.id); setPairs([]); }}
+                <button key={sess.id} onClick={() => setSelId(sess.id)}
                   style={{
                     padding: "7px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12,
                     fontFamily: "monospace", fontWeight: active ? 700 : 400,
