@@ -1306,7 +1306,7 @@ function TabSettle({ data, setData }) {
   const buildLoserText = (entry) => {
     const lines = [`${s.date} ${entry.loserLabel} 結算帳單`, ""];
     entry.pays.forEach(p => {
-      lines.push(`${p.toLabel} +${fmtAbs(p.amount)}`);
+      lines.push(`${firstName(p.toLabel)} +${fmtAbs(p.amount)}`);
       if (p.toBank) lines.push(p.toBank);
       lines.push("");
     });
