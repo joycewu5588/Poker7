@@ -123,8 +123,10 @@ function _pwSubmit() {
 }
 
 /* ─── 私人帳本的閘門（實際解鎖邏輯在下面的 App 程式碼裡）─── */
-function _privShowGate() {
-  document.getElementById("pw-gate").style.display = "none";
+var _privFrom = "gate";   // "gate" = 從密碼畫面進來；"app" = 從主帳本裡面進來
+function _privShowGate(from) {
+  _privFrom = (from === "app") ? "app" : "gate";
+  if (_privFrom === "gate") document.getElementById("pw-gate").style.display = "none";
   document.getElementById("priv-gate").style.display = "flex";
   var c = document.getElementById("priv-confirm");
   if (c) c.style.display = "none";
@@ -135,8 +137,11 @@ function _privShowGate() {
 
 function _privBack() {
   document.getElementById("priv-gate").style.display = "none";
-  document.getElementById("pw-gate").style.display = "flex";
-  _pwEntered = ""; _pwRenderDots();
+  // 從主帳本進來的就退回主帳本，不要把人踢回密碼畫面
+  if (_privFrom !== "app") {
+    document.getElementById("pw-gate").style.display = "flex";
+    _pwEntered = ""; _pwRenderDots();
+  }
   try { window.dispatchEvent(new Event("__priv_exit")); } catch(e) {}
 }
 
@@ -180,7 +185,7 @@ function _privKeyDown(e) {
 <div id="pw-gate">
   <div class="box">
     <h1>🦈 LEDGER</h1>
-    <p>請輸入 6 位數密碼　<span style="color:#4a5068;">v8</span></p>
+    <p>請輸入 6 位數密碼　<span style="color:#4a5068;">v9</span></p>
     <div id="pw-dots">
       <div class="dot"></div><div class="dot"></div><div class="dot"></div>
       <div class="dot"></div><div class="dot"></div><div class="dot"></div>
@@ -3400,6 +3405,13 @@ function PokerApp() {
               {t.label}
             </button>
           ))}
+          <button onClick={() => { try { _privShowGate("app"); } catch (e) {} }}
+            title="私人帳本（需要自己的密碼）"
+            style={{ background: "transparent", border: `1px dashed ${C.border}`,
+              color: C.dim, padding: "5px 11px", borderRadius: 4, cursor: "pointer",
+              fontFamily: "inherit", fontSize: 12, transition: "all .15s" }}>
+            🔒 私人
+          </button>
         </div>
       </div>
 
