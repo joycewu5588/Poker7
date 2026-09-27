@@ -2828,28 +2828,63 @@ function PrivateApp() {
   const [filter, setFilter] = useState("all");
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState({ date: privToday(), cat: "poker", sign: 1, amount: "", note: "" });
+  const [lastAutoBak, setLastAutoBak] = useState(() => (window.__privData && window.__privData.lastAutoBak) || "");
   const [showBak, setShowBak] = useState(false);
   const [pasteBox, setPasteBox] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [copied, setCopied] = useState("");
 
   const persist = useCallback(async (payload) => {
-    setEntries(payload.entries);
-    setBackups(payload.backups);
+    const full = {
+      entries: payload.entries,
+      backups: payload.backups,
+      lastAutoBak: payload.lastAutoBak !== undefined
+        ? payload.lastAutoBak
+        : ((window.__privData && window.__privData.lastAutoBak) || ""),
+    };
+    setEntries(full.entries);
+    setBackups(full.backups);
+    setLastAutoBak(full.lastAutoBak);
     setSaving(true);
     setError("");
     try {
       const fb = await getFirebase();
       await fb.setDoc(fb.doc(fb.db, PRIV_COL, window.__privId), {
-        payload: await privEncrypt(window.__privKey, payload),
+        payload: await privEncrypt(window.__privKey, full),
         updatedAt: Date.now(),
       });
-      window.__privData = payload;
+      window.__privData = full;
     } catch (e) {
       setError("儲存失敗：" + (e && e.message ? e.message : e));
     }
     setSaving(false);
   }, []);
+
+  // 每天第一次改動前，先自動存一份當天開始時的快照
+  const saveEntries = async (nextEntries) => {
+    const today = privToday();
+    const prev = entries;
+    if (lastAutoBak !== today && prev.length > 0) {
+      try {
+        const fb = await getFirebase();
+        const id = "a" + Date.now() + Math.random().toString(36).slice(2, 8);
+        await fb.setDoc(fb.doc(fb.db, PRIV_BAK, id), {
+          payload: await privEncrypt(window.__privKey, { entries: prev }),
+          updatedAt: Date.now(),
+        });
+        let nb = [{ id, ts: Date.now(), n: prev.length,
+          sum: prev.reduce((a, e) => a + e.amount, 0), auto: true }, ...backups];
+        const drop = nb.slice(PRIV_MAX_BAK);
+        nb = nb.slice(0, PRIV_MAX_BAK);
+        for (const d of drop) { try { await fb.deleteDoc(fb.doc(fb.db, PRIV_BAK, d.id)); } catch (err) {} }
+        await persist({ entries: nextEntries, backups: nb, lastAutoBak: today });
+        return;
+      } catch (e) {
+        // 自動備份失敗不能擋住存檔，繼續存
+      }
+    }
+    await persist({ entries: nextEntries, backups });
+  };
 
   const resetForm = () => { setForm({ date: privToday(), cat: "poker", sign: 1, amount: "", note: "" }); setEditId(null); };
 
@@ -2863,7 +2898,7 @@ function PrivateApp() {
       ? entries.map(e => (e.id === editId ? row : e))
       : [...entries, row];
     next.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-    persist({ entries: next, backups });
+    saveEntries(next);
     resetForm();
   };
 
@@ -2875,7 +2910,7 @@ function PrivateApp() {
 
   const remove = async (e) => {
     if (!(await dialog.confirm(`刪除 ${e.date} 的這筆 ${fmt(e.amount)}？`))) return;
-    persist({ entries: entries.filter(x => x.id !== e.id), backups });
+    saveEntries(entries.filter(x => x.id !== e.id));
     if (editId === e.id) resetForm();
   };
 
@@ -3143,7 +3178,9 @@ function PrivateApp() {
               {copied && <div style={{ fontSize: 12, color: C.green, marginTop: 8 }}>{copied}</div>}
 
               <div style={{ fontSize: 11, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
-                備份一樣是加密的，最多留 {PRIV_MAX_BAK} 份，超過會自動刪掉最舊的。
+                每天第一次記帳或刪除前，系統會自動存一份當天開始的快照，不用你按。
+                上面的按鈕是要多存一份的時候用的。<br />
+                備份一樣是加密的，最多留 {PRIV_MAX_BAK} 份，超過自動刪最舊的。
               </div>
 
               {backups.length === 0 ? (
@@ -3158,7 +3195,12 @@ function PrivateApp() {
                     <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10,
                       background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 4, padding: "9px 11px" }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, fontFamily: "monospace", color: C.text }}>{bakTs(b.ts)}</div>
+                        <div style={{ fontSize: 12, fontFamily: "monospace", color: C.text }}>
+                          {bakTs(b.ts)}
+                          {b.auto
+                            ? <Tag color={C.green}>自動</Tag>
+                            : <Tag color={C.gold}>手動</Tag>}
+                        </div>
                         <div style={{ fontSize: 10, color: C.dim, fontFamily: "monospace" }}>
                           {b.n} 筆　{typeof b.sum === "number" ? fmt(b.sum) : ""}
                         </div>
