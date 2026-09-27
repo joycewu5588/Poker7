@@ -185,7 +185,7 @@ function _privKeyDown(e) {
 <div id="pw-gate">
   <div class="box">
     <h1>🦈 LEDGER</h1>
-    <p>請輸入 6 位數密碼　<span style="color:#4a5068;">v9</span></p>
+    <p>請輸入 6 位數密碼　<span style="color:#4a5068;">v10</span></p>
     <div id="pw-dots">
       <div class="dot"></div><div class="dot"></div><div class="dot"></div>
       <div class="dot"></div><div class="dot"></div><div class="dot"></div>
@@ -205,12 +205,6 @@ function _privKeyDown(e) {
       <div class="key fn"></div>
     </div>
     <div class="err" id="pw-err"></div>
-    <div style="margin-top:14px; border-top:1px solid #2a3050; padding-top:12px;">
-      <button type="button" onpointerdown="_privShowGate()" onclick="_privShowGate()"
-        style="background:transparent; border:none; color:#6a6e88; font-size:12px; cursor:pointer; font-family:inherit; padding:8px 14px; touch-action:manipulation; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent;">
-        🔒 私人帳本
-      </button>
-    </div>
   </div>
 </div>
 
@@ -3008,8 +3002,15 @@ function PrivateApp() {
     setPasteBox(false); setPasteText(""); resetForm();
   };
 
-  const lock = () => {
+  // 從主帳本進來的，離開就直接回主帳本；從密碼畫面進來的，離開就回私人密碼畫面
+  const fromApp = typeof window !== "undefined" && window._privFrom === "app";
+
+  const leave = () => {
     window.__privKey = null; window.__privData = null; window.__privId = null; window.__privMode = false;
+    if (fromApp) {
+      window.dispatchEvent(new Event("__priv_exit"));
+      return;
+    }
     const g = document.getElementById("priv-gate");
     if (g) g.style.display = "flex";
     const i = document.getElementById("priv-pass");
@@ -3043,9 +3044,10 @@ function PrivateApp() {
             {error ? "❌ " + error : (saving ? "⏳ 加密儲存中..." : "✓ 已加密同步")}
           </div>
         </div>
-        <button onClick={lock} style={{ background: "transparent", border: `1px solid ${C.border}`,
-          color: C.dim, padding: "6px 12px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
-          🔓 鎖定
+        <button onClick={leave} style={{ background: "transparent", border: `1px solid ${C.border}`,
+          color: C.dim, padding: "6px 12px", borderRadius: 4, cursor: "pointer", fontSize: 12,
+          fontFamily: "inherit", flex: "none", whiteSpace: "nowrap" }}>
+          {fromApp ? "← 回主帳本" : "🔓 鎖定"}
         </button>
       </div>
 
