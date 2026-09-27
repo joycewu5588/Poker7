@@ -110,6 +110,57 @@ function _pwSubmit() {
     setTimeout(function(){ var e2 = document.getElementById("pw-err"); if(e2) e2.textContent = ""; }, 3000);
   }
 }
+
+/* ─── 私人帳本的閘門（實際解鎖邏輯在下面的 App 程式碼裡）─── */
+function _privShowGate() {
+  document.getElementById("pw-gate").style.display = "none";
+  document.getElementById("priv-gate").style.display = "flex";
+  var c = document.getElementById("priv-confirm");
+  if (c) c.style.display = "none";
+  _privErr("");
+  var i = document.getElementById("priv-pass");
+  if (i) { i.value = ""; setTimeout(function(){ try { i.focus(); } catch(e) {} }, 120); }
+}
+
+function _privBack() {
+  document.getElementById("priv-gate").style.display = "none";
+  document.getElementById("pw-gate").style.display = "flex";
+  _pwEntered = ""; _pwRenderDots();
+}
+
+function _privToggleShow() {
+  var i = document.getElementById("priv-pass");
+  var b = document.getElementById("priv-eye");
+  if (!i) return;
+  var hidden = i.style.webkitTextSecurity !== "none";
+  i.style.webkitTextSecurity = hidden ? "none" : "disc";
+  if (b) b.textContent = hidden ? "隱藏" : "顯示";
+}
+
+function _privErr(msg) {
+  var e = document.getElementById("priv-err");
+  if (e) e.textContent = msg || "";
+}
+
+function _privGo(createIfMissing) {
+  var c = document.getElementById("priv-confirm");
+  if (c) c.style.display = "none";
+  if (typeof window.__privDoUnlock !== "function") { _privErr("還在載入，請等一下再試"); return; }
+  window.__privDoUnlock(createIfMissing === true);
+}
+
+var _privTapTs = 0;
+function _privTap(e, create) {
+  try { if (e && e.preventDefault) e.preventDefault(); } catch(err) {}
+  var now = Date.now();
+  if (e && e.type === "click" && now - _privTapTs < 500) return;
+  _privTapTs = now;
+  _privGo(create);
+}
+
+function _privKeyDown(e) {
+  if (e && e.key === "Enter") { e.preventDefault(); _privGo(false); }
+}
 </script>
 <div id="loading"><div class="spin"></div><div>載入中...</div></div>
 
@@ -137,6 +188,60 @@ function _pwSubmit() {
       <div class="key fn"></div>
     </div>
     <div class="err" id="pw-err"></div>
+    <div style="margin-top:14px; border-top:1px solid #2a3050; padding-top:12px;">
+      <button type="button" onpointerdown="_privShowGate()" onclick="_privShowGate()"
+        style="background:transparent; border:none; color:#6a6e88; font-size:12px; cursor:pointer; font-family:inherit; padding:4px 8px; touch-action:manipulation;">
+        🔒 私人帳本
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- 私人帳本密碼 -->
+<div id="priv-gate" style="display:none; position:fixed; inset:0; background:#0a0c10; z-index:99999; flex-direction:column; align-items:center; justify-content:center; font-family:'Noto Serif TC',serif; padding:20px;">
+  <div style="background:#12151e; border:1px solid #4a90d9; border-radius:8px; padding:24px 20px; width:100%; max-width:380px; box-sizing:border-box;">
+    <h2 style="color:#4a90d9; margin:0 0 4px; font-size:19px; text-align:center;">🔒 私人帳本</h2>
+    <p style="color:#8d92aa; font-size:12px; text-align:center; margin:0 0 18px; font-family:'IBM Plex Mono',monospace;">只有你自己看得到</p>
+
+    <div style="display:flex; gap:8px; align-items:stretch;">
+      <input id="priv-pass" type="text" inputmode="text" autocomplete="off" autocorrect="off"
+        autocapitalize="off" spellcheck="false" onkeydown="_privKeyDown(event)"
+        placeholder="你自己的密碼"
+        style="-webkit-text-security:disc; flex:1; min-width:0; background:#1a1f2e; border:1px solid #2a3050; color:#e8e4d8; padding:11px 12px; border-radius:4px; font-family:monospace; font-size:16px; outline:none; box-sizing:border-box;">
+      <button type="button" id="priv-eye" onpointerdown="_privToggleShow()" onclick="_privToggleShow()"
+        style="background:transparent; border:1px solid #2a3050; color:#8d92aa; border-radius:4px; font-size:12px; padding:0 11px; cursor:pointer; font-family:inherit; touch-action:manipulation; flex:none;">顯示</button>
+    </div>
+
+    <button type="button" onpointerdown="_privTap(event,false)" onclick="_privTap(event,false)"
+      style="margin-top:12px; width:100%; padding:12px; background:#4a90d9; color:#0a0c10; border:none; border-radius:4px; font-size:15px; font-weight:700; cursor:pointer; font-family:inherit; touch-action:manipulation;">
+      進入
+    </button>
+
+    <div id="priv-confirm" style="display:none; margin-top:14px; background:#1a1f2e; border:1px solid #c9a84c; border-radius:5px; padding:13px;">
+      <div style="color:#f0d080; font-size:13px; line-height:1.7;">
+        找不到用這組密碼的帳本。<br>
+        要用它<b>建立一本新的</b>嗎？
+      </div>
+      <div style="color:#8d92aa; font-size:11px; margin-top:6px; line-height:1.6;">
+        如果你本來就有帳本，可能是密碼打錯了 —— 先確認一下再建立。
+      </div>
+      <div style="display:flex; gap:8px; margin-top:11px;">
+        <button type="button" onpointerdown="_privTap(event,true)" onclick="_privTap(event,true)"
+          style="flex:1; padding:9px; background:#c9a84c; color:#0a0c10; border:none; border-radius:4px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; touch-action:manipulation;">建立新帳本</button>
+        <button type="button" onpointerdown="document.getElementById('priv-confirm').style.display='none'" onclick="document.getElementById('priv-confirm').style.display='none'"
+          style="flex:1; padding:9px; background:transparent; color:#8d92aa; border:1px solid #2a3050; border-radius:4px; font-size:13px; cursor:pointer; font-family:inherit; touch-action:manipulation;">再試一次</button>
+      </div>
+    </div>
+
+    <div id="priv-err" style="color:#d97070; font-size:12px; margin-top:12px; min-height:16px; text-align:center; font-family:'IBM Plex Mono',monospace;"></div>
+
+    <div style="color:#5a5e78; font-size:11px; line-height:1.65; margin-top:10px; border-top:1px solid #2a3050; padding-top:11px;">
+      資料用你的密碼加密後才上傳，管理者打開資料庫也只看到亂碼。<br>
+      <b style="color:#8d92aa;">忘記密碼＝資料救不回來</b>，請記牢。
+    </div>
+
+    <button type="button" onpointerdown="_privBack()" onclick="_privBack()"
+      style="margin-top:14px; width:100%; padding:8px; background:transparent; color:#6a6e88; border:1px solid #2a3050; border-radius:4px; font-size:11px; cursor:pointer; font-family:inherit; touch-action:manipulation;">← 返回</button>
   </div>
 </div>
 
@@ -175,9 +280,10 @@ function _selectUser(name) {
 function _logoutPw() {
   try { sessionStorage.removeItem("guandi_pw_ok"); } catch(e) {}
   document.getElementById("user-gate").style.display = "none";
+  var pg = document.getElementById("priv-gate");
+  if (pg) pg.style.display = "none";
   document.getElementById("pw-gate").style.display = "flex";
-  document.getElementById("pw-input").value = "";
-  document.getElementById("pw-input").focus();
+  _pwEntered = ""; _pwRenderDots();
 }
 
 function _showUserGate() {
@@ -428,6 +534,101 @@ const DEFAULT_SESSIONS = [
 ];
 
 const DEFAULT_DATA = { sessions: DEFAULT_SESSIONS, members: DEFAULT_MEMBERS, expenses: [] };
+
+// ═══════════════════════════════════════════════════════
+// 私人帳本：端到端加密（AES-GCM，金鑰由使用者密碼推導）
+// 密文才上傳，沒有密碼的人（包含管理者）只看得到亂碼
+// ═══════════════════════════════════════════════════════
+const PRIV_SALT = "LEDGER-private-ledger-v1";
+const PRIV_COL  = "privateLedgers";
+
+async function privSha256Hex(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function privDeriveKey(pass) {
+  const enc = new TextEncoder();
+  const base = await crypto.subtle.importKey("raw", enc.encode(pass), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: enc.encode(PRIV_SALT), iterations: 250000, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+  );
+}
+
+async function privEncrypt(key, obj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key,
+    new TextEncoder().encode(JSON.stringify(obj)));
+  const all = new Uint8Array(iv.length + ct.byteLength);
+  all.set(iv, 0);
+  all.set(new Uint8Array(ct), iv.length);
+  let s = "";
+  for (let i = 0; i < all.length; i++) s += String.fromCharCode(all[i]);
+  return btoa(s);
+}
+
+async function privDecrypt(key, b64) {
+  const raw = atob(b64);
+  const all = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) all[i] = raw.charCodeAt(i);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: all.slice(0, 12) }, key, all.slice(12));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+let _privBusy = false;
+window.__privDoUnlock = async function (createIfMissing) {
+  if (_privBusy) return;
+  const input = document.getElementById("priv-pass");
+  const pass = (input ? input.value : "").trim();
+  if (pass.length < 4) { _privErr("密碼至少 4 個字"); return; }
+  if (!window.crypto || !crypto.subtle) { _privErr("這個瀏覽器不支援加密"); return; }
+
+  _privBusy = true;
+  _privErr("解鎖中…");
+  try {
+    const key = await privDeriveKey(pass);
+    const id  = (await privSha256Hex("LEDGER-priv-id|" + pass)).slice(0, 40);
+    const fb  = await getFirebase();
+    const ref = fb.doc(fb.db, PRIV_COL, id);
+    const snap = await fb.getDoc(ref);
+
+    let payload;
+    if (snap.exists() && snap.data().payload) {
+      try {
+        payload = await privDecrypt(key, snap.data().payload);
+      } catch (e) {
+        _privErr("密碼錯誤");
+        _privBusy = false;
+        return;
+      }
+    } else if (createIfMissing) {
+      payload = { entries: [] };
+      await fb.setDoc(ref, { payload: await privEncrypt(key, payload), updatedAt: Date.now() });
+    } else {
+      _privErr("");
+      const box = document.getElementById("priv-confirm");
+      if (box) box.style.display = "block";
+      _privBusy = false;
+      return;
+    }
+
+    if (!payload || !Array.isArray(payload.entries)) payload = { entries: [] };
+    window.__privMode = true;
+    window.__privKey  = key;
+    window.__privId   = id;
+    window.__privData = payload;
+    _privErr("");
+    if (input) input.value = "";
+    document.getElementById("priv-gate").style.display = "none";
+    const lo = document.getElementById("loading");
+    if (lo) lo.style.display = "none";
+    window.dispatchEvent(new Event("__priv_ready"));
+  } catch (e) {
+    _privErr("連線失敗：" + (e && e.message ? e.message : e));
+  }
+  _privBusy = false;
+};
 
 // ═══════════════════════════════════════════════════════
 // HELPERS
@@ -2601,6 +2802,234 @@ function TabBackup({ data, setData }) {
 }
 
 // ═══════════════════════════════════════════════════════
+// 私人帳本頁面
+// ═══════════════════════════════════════════════════════
+const PRIV_CATS = [
+  { id: "mahjong", label: "🀄️ 麻將",   color: C.green },
+  { id: "poker",   label: "♠️ Poker",  color: C.gold  },
+  { id: "golf",    label: "⛳️ 高爾夫", color: C.blue  },
+  { id: "other",   label: "📎 其他",   color: C.accent },
+];
+const privCat = id => PRIV_CATS.find(c => c.id === id) || PRIV_CATS[3];
+const privToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+function PrivateApp() {
+  const dialog = useDialog();
+  const [entries, setEntries] = useState(() => (window.__privData && window.__privData.entries) || []);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({ date: privToday(), cat: "poker", amount: "", note: "" });
+
+  const persist = useCallback(async (next) => {
+    setEntries(next);
+    setSaving(true);
+    setError("");
+    try {
+      const fb = await getFirebase();
+      const payload = { entries: next };
+      await fb.setDoc(fb.doc(fb.db, PRIV_COL, window.__privId), {
+        payload: await privEncrypt(window.__privKey, payload),
+        updatedAt: Date.now(),
+      });
+      window.__privData = payload;
+    } catch (e) {
+      setError("儲存失敗：" + (e && e.message ? e.message : e));
+    }
+    setSaving(false);
+  }, []);
+
+  const resetForm = () => { setForm({ date: privToday(), cat: "poker", amount: "", note: "" }); setEditId(null); };
+
+  const submit = () => {
+    const amt = Math.round(Number(String(form.amount).replace(/[,\s]/g, "")));
+    if (!form.date) { dialog.alert("請填日期"); return; }
+    if (!Number.isFinite(amt) || amt === 0) { dialog.alert("請填金額（贏是正數，輸是負數）"); return; }
+    const row = { id: editId || ("p" + Date.now()), date: form.date, cat: form.cat, amount: amt, note: (form.note || "").trim() };
+    const next = editId
+      ? entries.map(e => (e.id === editId ? row : e))
+      : [...entries, row];
+    next.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    persist(next);
+    resetForm();
+  };
+
+  const startEdit = (e) => {
+    setEditId(e.id);
+    setForm({ date: e.date, cat: e.cat, amount: String(e.amount), note: e.note || "" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const remove = async (e) => {
+    if (!(await dialog.confirm(`刪除 ${e.date} 的這筆 ${fmt(e.amount)}？`))) return;
+    persist(entries.filter(x => x.id !== e.id));
+    if (editId === e.id) resetForm();
+  };
+
+  const lock = () => {
+    window.__privKey = null; window.__privData = null; window.__privId = null; window.__privMode = false;
+    location.reload();
+  };
+
+  const total = entries.reduce((a, e) => a + e.amount, 0);
+  const byCat = PRIV_CATS.map(c => ({
+    ...c,
+    sum: entries.filter(e => e.cat === c.id).reduce((a, e) => a + e.amount, 0),
+    n: entries.filter(e => e.cat === c.id).length,
+  }));
+  const shown = filter === "all" ? entries : entries.filter(e => e.cat === filter);
+  const shownTotal = shown.reduce((a, e) => a + e.amount, 0);
+
+  const box = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: 16 };
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", color: C.text, fontFamily: "'Noto Serif TC', serif" }}>
+      {/* Header */}
+      <div style={{ background: "linear-gradient(135deg,#0a0c10,#12151e)", borderBottom: `1px solid ${C.blue}`,
+        padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
+        position: "sticky", top: 0, zIndex: 100, gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.blue, letterSpacing: "0.08em" }}>🔒 私人帳本</div>
+          <div style={{ fontSize: 10, color: error ? C.red : C.dim, fontFamily: "monospace", marginTop: 1 }}>
+            {error ? "❌ " + error : (saving ? "⏳ 加密儲存中..." : "✓ 已加密同步")}
+          </div>
+        </div>
+        <button onClick={lock} style={{ background: "transparent", border: `1px solid ${C.border}`,
+          color: C.dim, padding: "6px 12px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
+          🔓 鎖定
+        </button>
+      </div>
+
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: "20px 16px" }}>
+
+        {/* 總計 */}
+        <div style={{ ...box, textAlign: "center", padding: "22px 16px",
+          borderColor: total >= 0 ? C.green + "66" : C.red + "66" }}>
+          <div style={{ fontSize: 11, color: C.dim, letterSpacing: "0.16em" }}>總計</div>
+          <div style={{ fontSize: 40, fontWeight: 700, fontFamily: "monospace", marginTop: 2, lineHeight: 1.1,
+            color: total >= 0 ? C.green : C.red }}>
+            {fmt(total)}
+          </div>
+          <div style={{ fontSize: 11, color: C.dim, marginTop: 4 }}>{entries.length} 筆紀錄</div>
+        </div>
+
+        {/* 分項 */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8, marginTop: 10 }}>
+          {byCat.map(c => (
+            <div key={c.id} style={{ ...box, padding: "12px 14px", display: "flex",
+              justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, color: C.text }}>{c.label}</div>
+                <div style={{ fontSize: 10, color: C.dim, fontFamily: "monospace" }}>{c.n} 筆</div>
+              </div>
+              <div style={{ fontFamily: "monospace", fontSize: 17, fontWeight: 700,
+                color: c.sum === 0 ? C.dim : (c.sum > 0 ? C.green : C.red) }}>
+                {c.sum === 0 ? "—" : fmt(c.sum)}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* 新增／編輯 */}
+        <div style={{ ...box, marginTop: 16, borderColor: editId ? C.gold : C.border }}>
+          <div style={{ fontSize: 13, color: editId ? C.goldLight : C.text, fontWeight: 700, marginBottom: 12 }}>
+            {editId ? "✏️ 編輯這筆" : "➕ 記一筆"}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Input label="日期" type="date" value={form.date}
+              onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+            <Select label="項目" value={form.cat}
+              onChange={e => setForm(f => ({ ...f, cat: e.target.value }))}>
+              {PRIV_CATS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </Select>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Input label="金額（贏填正數，輸填負數）" type="text" inputMode="text"
+              placeholder="例：12000 或 -8500" value={form.amount}
+              onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Input label="備註（選填）" type="text" placeholder="地點、對象、任何你想記的"
+              value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <Btn onClick={submit} style={{ flex: 1 }}>{editId ? "更新" : "新增"}</Btn>
+            {editId && <Btn variant="secondary" onClick={resetForm}>取消</Btn>}
+          </div>
+        </div>
+
+        {/* 篩選 */}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 20 }}>
+          {[{ id: "all", label: "全部" }, ...PRIV_CATS].map(c => (
+            <button key={c.id} onClick={() => setFilter(c.id)}
+              style={{ background: filter === c.id ? "rgba(74,144,217,.14)" : "transparent",
+                border: `1px solid ${filter === c.id ? C.blue : C.border}`,
+                color: filter === c.id ? C.blue : C.dim,
+                padding: "5px 11px", borderRadius: 4, cursor: "pointer",
+                fontFamily: "inherit", fontSize: 12 }}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 清單 */}
+        <div style={{ marginTop: 12 }}>
+          <SectionHeader>
+            紀錄　{shown.length} 筆　{shown.length > 0 && <span style={{ color: shownTotal >= 0 ? C.green : C.red }}>{fmt(shownTotal)}</span>}
+          </SectionHeader>
+          {shown.length === 0 ? (
+            <div style={{ ...box, textAlign: "center", color: C.dim, fontSize: 13, padding: "28px 16px" }}>
+              {entries.length === 0 ? "還沒有紀錄，上面記第一筆吧" : "這個項目還沒有紀錄"}
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {shown.map(e => {
+                const c = privCat(e.cat);
+                return (
+                  <div key={e.id} style={{ ...box, padding: "11px 14px", display: "flex",
+                    alignItems: "center", gap: 12, borderLeft: `3px solid ${c.color}` }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13 }}>
+                        <span style={{ fontFamily: "monospace", color: C.dim }}>{e.date}</span>
+                        <span style={{ marginLeft: 8 }}>{c.label}</span>
+                      </div>
+                      {e.note && (
+                        <div style={{ fontSize: 11, color: C.dim, marginTop: 3, wordBreak: "break-word" }}>{e.note}</div>
+                      )}
+                    </div>
+                    <div style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 700, flex: "none",
+                      color: e.amount >= 0 ? C.green : C.red }}>
+                      {fmt(e.amount)}
+                    </div>
+                    <div style={{ display: "flex", gap: 4, flex: "none" }}>
+                      <button onClick={() => startEdit(e)} title="編輯"
+                        style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.dim,
+                          borderRadius: 3, cursor: "pointer", fontSize: 12, padding: "3px 7px", fontFamily: "inherit" }}>✏️</button>
+                      <button onClick={() => remove(e)} title="刪除"
+                        style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.dim,
+                          borderRadius: 3, cursor: "pointer", fontSize: 12, padding: "3px 7px", fontFamily: "inherit" }}>🗑</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginTop: 24, fontSize: 11, color: C.muted, lineHeight: 1.75, textAlign: "center" }}>
+          這些紀錄用你的密碼加密後才上傳，<br />
+          其他人（包含管理者）打開資料庫只看得到亂碼。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════════════════════
 const TABS = [
@@ -2785,9 +3214,15 @@ function PokerApp() {
 }
 
 function App() {
+  const [priv, setPriv] = useState(typeof window !== "undefined" && window.__privMode === true);
+  useEffect(() => {
+    const onReady = () => setPriv(true);
+    window.addEventListener("__priv_ready", onReady);
+    return () => window.removeEventListener("__priv_ready", onReady);
+  }, []);
   return (
     <DialogProvider>
-      <PokerApp />
+      {priv ? <PrivateApp /> : <PokerApp />}
     </DialogProvider>
   );
 }
