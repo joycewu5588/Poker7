@@ -541,6 +541,8 @@ const DEFAULT_DATA = { sessions: DEFAULT_SESSIONS, members: DEFAULT_MEMBERS, exp
 // ═══════════════════════════════════════════════════════
 const PRIV_SALT = "LEDGER-private-ledger-v1";
 const PRIV_COL  = "privateLedgers";
+const PRIV_BAK  = "privateBackups";
+const PRIV_MAX_BAK = 20;
 
 async function privSha256Hex(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
@@ -614,6 +616,7 @@ window.__privDoUnlock = async function (createIfMissing) {
     }
 
     if (!payload || !Array.isArray(payload.entries)) payload = { entries: [] };
+    if (!Array.isArray(payload.backups)) payload.backups = [];
     window.__privMode = true;
     window.__privKey  = key;
     window.__privId   = id;
@@ -2819,19 +2822,24 @@ const privToday = () => {
 function PrivateApp() {
   const dialog = useDialog();
   const [entries, setEntries] = useState(() => (window.__privData && window.__privData.entries) || []);
+  const [backups, setBackups] = useState(() => (window.__privData && window.__privData.backups) || []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("all");
   const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({ date: privToday(), cat: "poker", amount: "", note: "" });
+  const [form, setForm] = useState({ date: privToday(), cat: "poker", sign: 1, amount: "", note: "" });
+  const [showBak, setShowBak] = useState(false);
+  const [pasteBox, setPasteBox] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [copied, setCopied] = useState("");
 
-  const persist = useCallback(async (next) => {
-    setEntries(next);
+  const persist = useCallback(async (payload) => {
+    setEntries(payload.entries);
+    setBackups(payload.backups);
     setSaving(true);
     setError("");
     try {
       const fb = await getFirebase();
-      const payload = { entries: next };
       await fb.setDoc(fb.doc(fb.db, PRIV_COL, window.__privId), {
         payload: await privEncrypt(window.__privKey, payload),
         updatedAt: Date.now(),
@@ -2843,31 +2851,109 @@ function PrivateApp() {
     setSaving(false);
   }, []);
 
-  const resetForm = () => { setForm({ date: privToday(), cat: "poker", amount: "", note: "" }); setEditId(null); };
+  const resetForm = () => { setForm({ date: privToday(), cat: "poker", sign: 1, amount: "", note: "" }); setEditId(null); };
 
   const submit = () => {
-    const amt = Math.round(Number(String(form.amount).replace(/[,\s]/g, "")));
+    const raw = Math.abs(Math.round(Number(String(form.amount).replace(/[,\s+-]/g, ""))));
     if (!form.date) { dialog.alert("請填日期"); return; }
-    if (!Number.isFinite(amt) || amt === 0) { dialog.alert("請填金額（贏是正數，輸是負數）"); return; }
+    if (!Number.isFinite(raw) || raw === 0) { dialog.alert("請填金額"); return; }
+    const amt = raw * form.sign;
     const row = { id: editId || ("p" + Date.now()), date: form.date, cat: form.cat, amount: amt, note: (form.note || "").trim() };
     const next = editId
       ? entries.map(e => (e.id === editId ? row : e))
       : [...entries, row];
     next.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-    persist(next);
+    persist({ entries: next, backups });
     resetForm();
   };
 
   const startEdit = (e) => {
     setEditId(e.id);
-    setForm({ date: e.date, cat: e.cat, amount: String(e.amount), note: e.note || "" });
+    setForm({ date: e.date, cat: e.cat, sign: e.amount >= 0 ? 1 : -1, amount: String(Math.abs(e.amount)), note: e.note || "" });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const remove = async (e) => {
     if (!(await dialog.confirm(`刪除 ${e.date} 的這筆 ${fmt(e.amount)}？`))) return;
-    persist(entries.filter(x => x.id !== e.id));
+    persist({ entries: entries.filter(x => x.id !== e.id), backups });
     if (editId === e.id) resetForm();
+  };
+
+  // ─── 雲端備份（一樣是加密的）───
+  const bakTs = ts => {
+    const d = new Date(ts);
+    const p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+
+  const makeBackup = async () => {
+    if (entries.length === 0) { dialog.alert("還沒有紀錄可以備份"); return; }
+    setSaving(true); setError("");
+    try {
+      const fb = await getFirebase();
+      const id = "b" + Date.now() + Math.random().toString(36).slice(2, 8);
+      await fb.setDoc(fb.doc(fb.db, PRIV_BAK, id), {
+        payload: await privEncrypt(window.__privKey, { entries }),
+        updatedAt: Date.now(),
+      });
+      let nb = [{ id, ts: Date.now(), n: entries.length, sum: entries.reduce((a, e) => a + e.amount, 0) }, ...backups];
+      const drop = nb.slice(PRIV_MAX_BAK);
+      nb = nb.slice(0, PRIV_MAX_BAK);
+      for (const d of drop) { try { await fb.deleteDoc(fb.doc(fb.db, PRIV_BAK, d.id)); } catch (e) {} }
+      await persist({ entries, backups: nb });
+      setShowBak(true);
+    } catch (e) {
+      setError("備份失敗：" + (e && e.message ? e.message : e));
+      setSaving(false);
+    }
+  };
+
+  const restoreBackup = async (b) => {
+    if (!(await dialog.confirm(`還原到 ${bakTs(b.ts)} 的版本（${b.n} 筆）？\n現在的 ${entries.length} 筆會被蓋掉。`))) return;
+    setSaving(true); setError("");
+    try {
+      const fb = await getFirebase();
+      const snap = await fb.getDoc(fb.doc(fb.db, PRIV_BAK, b.id));
+      if (!snap.exists() || !snap.data().payload) { setError("找不到這個備份"); setSaving(false); return; }
+      const got = await privDecrypt(window.__privKey, snap.data().payload);
+      await persist({ entries: Array.isArray(got.entries) ? got.entries : [], backups });
+      resetForm();
+    } catch (e) {
+      setError("還原失敗：" + (e && e.message ? e.message : e));
+      setSaving(false);
+    }
+  };
+
+  const deleteBackup = async (b) => {
+    if (!(await dialog.confirm(`刪除 ${bakTs(b.ts)} 這個備份？`))) return;
+    try {
+      const fb = await getFirebase();
+      await fb.deleteDoc(fb.doc(fb.db, PRIV_BAK, b.id));
+    } catch (e) {}
+    persist({ entries, backups: backups.filter(x => x.id !== b.id) });
+  };
+
+  const copyAll = async () => {
+    const text = JSON.stringify({ ledger: "LEDGER-private", ts: Date.now(), entries }, null, 1);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied("已複製 " + entries.length + " 筆，貼到備忘錄存起來");
+    } catch (e) {
+      setPasteText(text); setPasteBox(true);
+      setCopied("自動複製失敗，請手動全選下面的文字複製");
+    }
+    setTimeout(() => setCopied(""), 5000);
+  };
+
+  const restoreFromText = async () => {
+    let got;
+    try {
+      got = JSON.parse(pasteText);
+    } catch (e) { dialog.alert("這段文字看起來不是備份，請確認有整段貼上"); return; }
+    if (!got || !Array.isArray(got.entries)) { dialog.alert("這段文字裡找不到紀錄"); return; }
+    if (!(await dialog.confirm(`從文字還原 ${got.entries.length} 筆？現在的 ${entries.length} 筆會被蓋掉。`))) return;
+    await persist({ entries: got.entries, backups });
+    setPasteBox(false); setPasteText(""); resetForm();
   };
 
   const lock = () => {
@@ -2947,10 +3033,28 @@ function PrivateApp() {
               {PRIV_CATS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
             </Select>
           </div>
+          <div style={{ marginTop: 12 }}>
+            <label style={{ fontSize: 11, color: C.dim, letterSpacing: "0.04em" }}>這場是</label>
+            <div style={{ display: "flex", gap: 8, marginTop: 5 }}>
+              {[{ v: 1, t: "贏", c: C.green }, { v: -1, t: "輸", c: C.red }].map(o => (
+                <button key={o.v} type="button" onClick={() => setForm(f => ({ ...f, sign: o.v }))}
+                  style={{ flex: 1, padding: "13px 0", borderRadius: 5, cursor: "pointer",
+                    fontFamily: "inherit", fontSize: 17, fontWeight: 700, transition: "all .15s",
+                    touchAction: "manipulation",
+                    background: form.sign === o.v ? o.c : "transparent",
+                    color: form.sign === o.v ? "#0a0c10" : C.dim,
+                    border: `1px solid ${form.sign === o.v ? o.c : C.border}` }}>
+                  {o.t}
+                </button>
+              ))}
+            </div>
+          </div>
           <div style={{ marginTop: 10 }}>
-            <Input label="金額（贏填正數，輸填負數）" type="text" inputMode="text"
-              placeholder="例：12000 或 -8500" value={form.amount}
-              onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+            <Input label="金額" type="text" inputMode="numeric" pattern="[0-9]*"
+              placeholder="例：12000" value={form.amount}
+              onChange={e => setForm(f => ({ ...f, amount: e.target.value.replace(/[^\d]/g, "") }))}
+              style={{ fontSize: 18, padding: "11px 12px",
+                color: form.sign === 1 ? C.green : C.red, fontWeight: 700 }} />
           </div>
           <div style={{ marginTop: 10 }}>
             <Input label="備註（選填）" type="text" placeholder="地點、對象、任何你想記的"
@@ -3016,6 +3120,78 @@ function PrivateApp() {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+
+        {/* 備份 */}
+        <div style={{ ...box, marginTop: 22, padding: 0, overflow: "hidden" }}>
+          <button onClick={() => setShowBak(v => !v)}
+            style={{ width: "100%", background: "transparent", border: "none", color: C.text,
+              padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", fontSize: 14,
+              display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>🛡️ 備份　<span style={{ color: C.dim, fontSize: 12 }}>{backups.length} 份</span></span>
+            <span style={{ color: C.dim, fontSize: 12 }}>{showBak ? "收合 ▲" : "展開 ▼"}</span>
+          </button>
+
+          {showBak && (
+            <div style={{ padding: "0 16px 16px" }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Btn onClick={makeBackup} disabled={saving} style={{ flex: 1, minWidth: 130 }}>☁️ 立刻備份</Btn>
+                <Btn variant="secondary" onClick={copyAll} style={{ flex: 1, minWidth: 130 }}>📋 複製成文字</Btn>
+              </div>
+              {copied && <div style={{ fontSize: 12, color: C.green, marginTop: 8 }}>{copied}</div>}
+
+              <div style={{ fontSize: 11, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
+                備份一樣是加密的，最多留 {PRIV_MAX_BAK} 份，超過會自動刪掉最舊的。
+              </div>
+
+              {backups.length === 0 ? (
+                <div style={{ fontSize: 12, color: C.dim, marginTop: 12, padding: "14px 0", textAlign: "center",
+                  borderTop: `1px solid ${C.border}` }}>
+                  還沒有備份
+                </div>
+              ) : (
+                <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 10,
+                  display: "flex", flexDirection: "column", gap: 6 }}>
+                  {backups.map(b => (
+                    <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10,
+                      background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 4, padding: "9px 11px" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontFamily: "monospace", color: C.text }}>{bakTs(b.ts)}</div>
+                        <div style={{ fontSize: 10, color: C.dim, fontFamily: "monospace" }}>
+                          {b.n} 筆　{typeof b.sum === "number" ? fmt(b.sum) : ""}
+                        </div>
+                      </div>
+                      <button onClick={() => restoreBackup(b)}
+                        style={{ background: "transparent", border: `1px solid ${C.blue}66`, color: C.blue,
+                          borderRadius: 3, cursor: "pointer", fontSize: 11, padding: "5px 10px", fontFamily: "inherit" }}>還原</button>
+                      <button onClick={() => deleteBackup(b)}
+                        style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.dim,
+                          borderRadius: 3, cursor: "pointer", fontSize: 11, padding: "5px 8px", fontFamily: "inherit" }}>🗑</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button onClick={() => setPasteBox(v => !v)}
+                style={{ marginTop: 12, background: "transparent", border: "none", color: C.dim,
+                  fontSize: 11, cursor: "pointer", fontFamily: "inherit", padding: 0, textDecoration: "underline" }}>
+                從文字還原
+              </button>
+              {pasteBox && (
+                <div style={{ marginTop: 8 }}>
+                  <textarea value={pasteText} onChange={e => setPasteText(e.target.value)}
+                    placeholder="把之前複製的備份文字整段貼進來"
+                    style={{ width: "100%", minHeight: 110, boxSizing: "border-box", background: C.surface2,
+                      border: `1px solid ${C.border}`, color: C.text, borderRadius: 4, padding: 10,
+                      fontFamily: "monospace", fontSize: 11, outline: "none", resize: "vertical" }} />
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <Btn onClick={restoreFromText} style={{ flex: 1 }}>還原</Btn>
+                    <Btn variant="secondary" onClick={() => { setPasteBox(false); setPasteText(""); }}>取消</Btn>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
