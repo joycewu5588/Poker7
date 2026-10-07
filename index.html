@@ -185,7 +185,7 @@ function _privKeyDown(e) {
 <div id="pw-gate">
   <div class="box">
     <h1>🦈 LEDGER</h1>
-    <p>請輸入 6 位數密碼　<span style="color:#4a5068;">v10</span></p>
+    <p>請輸入 6 位數密碼　<span style="color:#4a5068;">v11</span></p>
     <div id="pw-dots">
       <div class="dot"></div><div class="dot"></div><div class="dot"></div>
       <div class="dot"></div><div class="dot"></div><div class="dot"></div>
@@ -355,7 +355,7 @@ window.__loadTimeout = setTimeout(function(){
   onerror="window.__loadStep('❌ Babel 載入失敗')"></script>
 
 <script type="text/babel" data-presets="env,react">
-const { useState, useEffect, useCallback, createContext, useContext, useRef } = React;
+const { useState, useEffect, useCallback, useMemo, createContext, useContext, useRef } = React;
 
 // ─── Firebase 設定（透過 CDN 動態載入）───
 const firebaseConfig = {
@@ -991,6 +991,17 @@ const Modal = ({ open, title, onClose, onSave, children }) => {
 
 const Divider = () => <div style={{ height: 1, background: C.border, margin: "8px 0" }} />;
 
+// ─── 權限：除了「新增／場次」和私人帳本，其他頁面預設只有管理者能改 ───
+const OWNER = "Joyce";
+const isOwner = () => typeof window !== "undefined" && window.__currentUser === OWNER;
+
+const ReadOnlyBar = () => (
+  <div style={{ background: C.blue + "14", border: `1px solid ${C.blue}44`, borderRadius: 6,
+    padding: "9px 13px", marginBottom: 14, fontSize: 12, color: C.blue, lineHeight: 1.6 }}>
+    👁 這頁目前是唯讀的 —— 只有 {OWNER} 能修改。有需要請找 {OWNER} 開權限。
+  </div>
+);
+
 const FR = ({ label, value, valueColor }) => (
   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 12 }}>
     <span style={{ color: C.dim }}>{label}</span>
@@ -1029,7 +1040,11 @@ function TabRecords({ data, setData, onEdit }) {
         const regular = s.players.filter(p => p.type !== "dealer");
         // 未結算 = 沒勾選 settled
         const inProgress = !s.settled;
-        const editTimeStr = s.lastEditTs ? new Date(s.lastEditTs).toLocaleString("zh-TW", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
+        const stampTime = ts => ts ? new Date(ts).toLocaleString("zh-TW", {month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
+        const editTimeStr = stampTime(s.lastEditTs);
+        const madeTimeStr = stampTime(s.createdTs);
+        // 建立後一分鐘內的存檔不算「修改」，避免剛新增就顯示兩行一樣的時間
+        const edited = s.lastEditTs && (!s.createdTs || s.lastEditTs - s.createdTs > 60000);
         return (
           <div key={s.id} style={{ background: C.surface, border: `1px solid ${inProgress ? C.red+"66" : C.border}`, borderRadius: 8, overflow: "hidden" }}>
             <div style={{ background: C.surface2, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${C.border}` }}>
@@ -1045,9 +1060,15 @@ function TabRecords({ data, setData, onEdit }) {
                   style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 3, cursor: "pointer", fontSize: 10, padding: "2px 6px" }}>🗑</button>
               </div>
             </div>
-            {(s.lastEditor || editTimeStr) && (
-              <div style={{ padding: "4px 14px", fontSize: 10, color: C.muted, fontFamily: "monospace", borderBottom: `1px solid ${C.border}`, background: C.bg }}>
-                ✎ {s.lastEditor || "?"} 編輯於 {editTimeStr || "?"}
+            {(s.createdTs || s.lastEditor || editTimeStr) && (
+              <div style={{ padding: "5px 14px", fontSize: 10, color: C.muted, fontFamily: "monospace",
+                borderBottom: `1px solid ${C.border}`, background: C.bg, lineHeight: 1.75 }}>
+                {s.createdTs && (
+                  <div>📅 建立：{madeTimeStr}　👤 {s.createdBy || "?"}</div>
+                )}
+                {edited && (
+                  <div style={{ color: C.dim }}>✏️ 修改：{editTimeStr}　👤 <span style={{ color: C.blue }}>{s.lastEditor || "?"}</span></div>
+                )}
               </div>
             )}
             <div style={{ padding: "12px 14px" }}>
@@ -1234,11 +1255,19 @@ function TabNew({ data, setData, editingId, clearEditing }) {
       lastEditor: editor,
       lastEditTs: Date.now(),
     };
+    // 新場次才蓋「建立」戳記；編輯既有場次時沿用原本的建立者與時間
+    if (!editingId) {
+      sessionData.createdBy = editor;
+      sessionData.createdTs = sessionData.lastEditTs;
+    }
     // 編輯既有場次：保留手動結算（改餐費/Jackpot 等純記錄不會洗掉已完成的結算）
     const newSessions = editingId
       ? data.sessions.map(s => {
           if (s.id !== editingId) return s;
-          return s.customSettlement ? { ...sessionData, customSettlement: s.customSettlement } : sessionData;
+          const kept = { ...sessionData };
+          if (s.createdBy) kept.createdBy = s.createdBy;
+          if (s.createdTs) kept.createdTs = s.createdTs;
+          return s.customSettlement ? { ...kept, customSettlement: s.customSettlement } : kept;
         }).sort((a, b) => a.date < b.date ? -1 : 1)
       : [...data.sessions, sessionData].sort((a, b) => a.date < b.date ? -1 : 1);
     setData(d => {
@@ -1464,7 +1493,7 @@ function TabNew({ data, setData, editingId, clearEditing }) {
 // ═══════════════════════════════════════════════════════
 // TAB: SETTLEMENT
 // ═══════════════════════════════════════════════════════
-function TabSettle({ data, setData }) {
+function TabSettle({ data, setData, readOnly }) {
   const dialog = useDialog();
   const { sessions, members } = data;
   // 進頁自動載入：最新「未結算」場次，沒有就最新一場
@@ -1727,6 +1756,7 @@ function TabSettle({ data, setData }) {
 
   return (
     <div>
+      {readOnly && <ReadOnlyBar />}
       {/* 場次按鈕列表（最新在前；預設只顯示最近 8 場） */}
       {(() => {
         const sessList = [...sessions].reverse();
@@ -1827,9 +1857,11 @@ function TabSettle({ data, setData }) {
         {/* 手動編輯按鈕列 */}
         <div style={{ marginBottom: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {!editMode ? (
+            readOnly ? null : (
             <Btn variant="secondary" onClick={startEdit} style={{ fontSize: 12, padding: "6px 14px" }}>
               ✏️ 手動調整轉帳
             </Btn>
+            )
           ) : (
             <>
               <Btn onClick={saveCustom} style={{ fontSize: 12, padding: "6px 14px" }}>💾 儲存此結算</Btn>
@@ -2257,16 +2289,16 @@ function TabCumul({ data }) {
 // ═══════════════════════════════════════════════════════
 // TAB: RESERVE
 // ═══════════════════════════════════════════════════════
-function TabReserve({ data, setData }) {
+function TabReserve({ data, setData, readOnly }) {
   const dialog = useDialog();
   const { sessions, expenses = [] } = data;
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState({ date: "", amount: "", desc: "" });
+  const [form, setForm] = useState({ date: "", amount: "", desc: "", payout: false });
   const [showLedger, setShowLedger] = useState(false);
 
   const events = [
     ...sessions.map(s => ({ date: s.date, amount: calcReserve(s), note: s.note, kind: "session", id: s.id })),
-    ...expenses.map(e => ({ date: e.date, amount: -e.amount, note: e.desc, kind: "expense", id: e.id })),
+    ...expenses.map(e => ({ date: e.date, amount: -e.amount, note: e.desc, kind: "expense", id: e.id, payout: !!e.payout })),
   ].sort((a, b) => a.date < b.date ? -1 : 1);
 
   let run = 0;
@@ -2279,8 +2311,13 @@ function TabReserve({ data, setData }) {
   const cVenue = sumOf("venueFee");
   const cWage = sumOf("dealerWage");
   const cHelper = sumOf("helperTip");
-  const cMeal = expenses.filter(e => (e.desc || "").includes("餐費")).reduce((a, e) => a + e.amount, 0);
-  const cOther = expenses.reduce((a, e) => a + e.amount, 0) - cMeal;
+  // 標記為「回饋」的支出（退水、年終聚餐…）是把錢還給大家，不是辦聚會的成本，
+  // 所以不進成本分析，但照樣從公積金餘額扣。
+  const opEx = expenses.filter(e => !e.payout);
+  const cMeal = opEx.filter(e => (e.desc || "").includes("餐費")).reduce((a, e) => a + e.amount, 0);
+  const cOther = opEx.reduce((a, e) => a + e.amount, 0) - cMeal;
+  const cPayout = expenses.filter(e => e.payout).reduce((a, e) => a + e.amount, 0);
+  const allEx = expenses.reduce((a, e) => a + e.amount, 0);
   const refJackpot = sumOf("jackpot");
   const costTotal = cVenue + cWage + cHelper + cMeal + cOther + refJackpot;
   const refWater = sumOf("totalWater");
@@ -2288,19 +2325,25 @@ function TabReserve({ data, setData }) {
 
   const saveExpense = () => {
     if (!form.date || !form.amount) { dialog.alert("請填日期和金額"); return; }
-    const newExp = { id: "e" + Date.now(), date: form.date, amount: parseInt(form.amount) || 0, desc: form.desc };
+    const newExp = { id: "e" + Date.now(), date: form.date, amount: parseInt(form.amount) || 0,
+      desc: form.desc, payout: !!form.payout };
     setData(d => ({ ...d, expenses: [...(d.expenses || []), newExp].sort((a, b) => a.date < b.date ? -1 : 1) }));
-    setModal(false); setForm({ date: "", amount: "", desc: "" });
+    setModal(false); setForm({ date: "", amount: "", desc: "", payout: false });
+  };
+
+  const togglePayout = (id) => {
+    setData(d => ({ ...d, expenses: d.expenses.map(e => e.id === id ? { ...e, payout: !e.payout } : e) }));
   };
 
   return (
     <div>
+      {readOnly && <ReadOnlyBar />}
       <div style={{ display: "flex", gap: 14, alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap" }}>
         <div style={{ background: "linear-gradient(135deg,rgba(201,168,76,.15),rgba(201,168,76,.05))", border: `1px solid ${C.gold}`, borderRadius: 8, padding: "16px 24px", textAlign: "center" }}>
           <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.14em", marginBottom: 6 }}>公積金餘額</div>
           <div style={{ fontFamily: "monospace", fontSize: 28, fontWeight: 700, color: C.goldLight }}>${fmtAbs(total)}</div>
         </div>
-        <Btn onClick={() => setModal(true)} style={{ alignSelf: "flex-end" }}>－ 新增支出</Btn>
+        {!readOnly && <Btn onClick={() => setModal(true)} style={{ alignSelf: "flex-end" }}>－ 新增支出</Btn>}
       </div>
 
       {/* ─── 成本分析 ─── */}
@@ -2347,7 +2390,7 @@ function TabReserve({ data, setData }) {
 
         {/* 參考數據 */}
         <div style={{ background: C.surface2, border: `1px dashed ${C.border}`, borderRadius: 8, padding: "6px 14px" }}>
-          <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.1em", padding: "8px 0 4px" }}>參考</div>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.1em", padding: "8px 0 4px" }}>參考（不算成本）</div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
             padding: "9px 0", borderTop: `1px solid ${C.border}` }}>
             <span style={{ fontSize: 13, color: C.dim }}>💰 水錢收入</span>
@@ -2356,11 +2399,17 @@ function TabReserve({ data, setData }) {
               <span style={{ fontFamily: "monospace", fontSize: 11, color: C.dim, minWidth: 62, textAlign: "right" }}>／場 {fmtAbs(avg(refWater))}</span>
             </span>
           </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+            padding: "9px 0", borderTop: `1px solid ${C.border}` }}>
+            <span style={{ fontSize: 13, color: C.dim }}>🎁 回饋大家（退水／聚餐）</span>
+            <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: C.green }}>{fmtAbs(cPayout)}</span>
+          </div>
         </div>
 
         <div style={{ fontSize: 11, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
-          水錢 {fmtAbs(refWater)} － 場地/薪/管家/公積金支出 {fmtAbs(costTotal - refJackpot)} ＝ <span style={{ color: C.goldLight, fontWeight: 700 }}>{fmt(refWater - costTotal + refJackpot)}</span>（公積金餘額）<br />
-          <span style={{ color: C.muted }}>※ Jackpot {fmtAbs(refJackpot)} 已計入總支出，但不從公積金扣</span>
+          水錢 {fmtAbs(refWater)} － 場地/薪/管家 {fmtAbs(cVenue + cWage + cHelper)} － 公積金支出 {fmtAbs(allEx)} ＝ <span style={{ color: C.goldLight, fontWeight: 700 }}>{fmt(refWater - cVenue - cWage - cHelper - allEx)}</span>（公積金餘額）<br />
+          <span style={{ color: C.muted }}>※ Jackpot {fmtAbs(refJackpot)} 已計入總支出，但不從公積金扣</span><br />
+          {cPayout > 0 && <span style={{ color: C.muted }}>※ 回饋 {fmtAbs(cPayout)} 有從公積金扣，但不算成本</span>}
         </div>
       </div>
 
@@ -2385,13 +2434,22 @@ function TabReserve({ data, setData }) {
             <div style={{ paddingBottom: 20, flex: 1 }}>
               <div style={{ fontFamily: "monospace", fontSize: 11, color: C.dim, marginBottom: 4 }}>
                 {it.date} {it.kind === "expense" && <span style={{ fontSize: 10, color: C.blue }}>[支出]</span>}
+                {it.payout && <span style={{ fontSize: 10, color: C.green, marginLeft: 4 }}>[回饋·不算成本]</span>}
               </div>
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 5, padding: "10px 12px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: it.amount >= 0 ? C.gold : C.red }}>{fmt(it.amount)}</span>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <span style={{ fontFamily: "monospace", fontSize: 12, color: C.dim }}>累計 {fmt(it.run)}</span>
-                    {it.kind === "expense" && (
+                    {it.kind === "expense" && !readOnly && (
+                      <button onClick={() => togglePayout(it.id)}
+                        title={it.payout ? "改回算成本" : "標記為回饋（不算成本）"}
+                        style={{ background: it.payout ? C.green + "22" : "transparent",
+                          border: `1px solid ${it.payout ? C.green + "77" : C.border}`,
+                          color: it.payout ? C.green : C.dim, cursor: "pointer", fontSize: 10,
+                          padding: "2px 7px", borderRadius: 3, fontFamily: "inherit" }}>🎁 回饋</button>
+                    )}
+                    {it.kind === "expense" && !readOnly && (
                       <button onClick={async () => {
                         if (await dialog.confirm("刪除此支出？")) setData(d => ({ ...d, expenses: d.expenses.filter(e => e.id !== it.id) }));
                       }} style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer", fontSize: 12 }}>✕</button>
@@ -2413,6 +2471,20 @@ function TabReserve({ data, setData }) {
           <Input label="📅 日期" type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
           <Input label="💸 金額" type="number" placeholder="e.g. 3200" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
           <Input label="📝 說明" placeholder="e.g. 餐費 Shaan 2200" value={form.desc} onChange={e => setForm(f => ({ ...f, desc: e.target.value }))} />
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer",
+            background: form.payout ? C.green + "15" : C.surface2,
+            border: `1px solid ${form.payout ? C.green + "77" : C.border}`,
+            borderRadius: 5, padding: "10px 12px", marginTop: 2 }}>
+            <input type="checkbox" checked={!!form.payout}
+              onChange={e => setForm(f => ({ ...f, payout: e.target.checked }))}
+              style={{ width: 17, height: 17, marginTop: 1, flexShrink: 0, accentColor: C.green }} />
+            <span>
+              <span style={{ fontSize: 13, color: form.payout ? C.green : C.text }}>🎁 這筆是回饋給大家的</span>
+              <span style={{ display: "block", fontSize: 11, color: C.dim, marginTop: 2, lineHeight: 1.6 }}>
+                退水、年終聚餐這類把錢還給大家的支出。會從公積金餘額扣，但不算進成本分析。
+              </span>
+            </span>
+          </label>
         </div>
       </Modal>
     </div>
@@ -2473,7 +2545,7 @@ function TabBonus({ data }) {
 // ═══════════════════════════════════════════════════════
 // TAB: MEMBERS
 // ═══════════════════════════════════════════════════════
-function TabMembers({ data, setData }) {
+function TabMembers({ data, setData, readOnly }) {
   const { members } = data;
   const [modal, setModal] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -2514,11 +2586,14 @@ function TabMembers({ data, setData }) {
 
   return (
     <div>
+      {readOnly && <ReadOnlyBar />}
+      {!readOnly && (
       <div style={{ marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Btn onClick={() => openAdd("member")}>＋ 新增成員</Btn>
         <Btn variant="accent" onClick={() => openAdd("guest")}>＋ 新增來賓</Btn>
         <Btn variant="dark" onClick={() => openAdd("dealer")}>＋ 新增Dealer</Btn>
       </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(250px,1fr))", gap: 10 }}>
         {sorted.map(m => (
           <div key={m.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
@@ -2532,7 +2607,7 @@ function TabMembers({ data, setData }) {
               <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>別名：{m.aliases.join("、")}</div>
               <div style={{ fontFamily: "monospace", fontSize: 11, color: C.muted, marginTop: 2 }}>{m.bank || "—"}</div>
             </div>
-            <button onClick={() => openEdit(m)} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.dim, padding: "3px 9px", borderRadius: 4, cursor: "pointer", fontSize: 11, whiteSpace: "nowrap" }}>編輯</button>
+            {!readOnly && <button onClick={() => openEdit(m)} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.dim, padding: "3px 9px", borderRadius: 4, cursor: "pointer", fontSize: 11, whiteSpace: "nowrap" }}>編輯</button>}
           </div>
         ))}
       </div>
@@ -2560,7 +2635,7 @@ function TabMembers({ data, setData }) {
 // ═══════════════════════════════════════════════════════
 const BACKUP_KEY = "pokerclub_backups";
 
-function TabBackup({ data, setData }) {
+function TabBackup({ data, setData, readOnly }) {
   const dialog = useDialog();
   const [exportText, setExportText] = useState("");
   const [importText, setImportText] = useState("");
@@ -2707,6 +2782,7 @@ function TabBackup({ data, setData }) {
 
   return (
     <div style={{ maxWidth: 720 }}>
+      {readOnly && <ReadOnlyBar />}
       {msg && (
         <div style={{ background: msg.isErr ? C.red+"22" : C.green+"22",
           border: `1px solid ${msg.isErr ? C.red : C.green}44`,
@@ -2736,6 +2812,7 @@ function TabBackup({ data, setData }) {
       </div>
 
       {/* 重置為內建資料 */}
+      {!readOnly && (
       <div style={{ background: C.surface, border: `1px solid ${C.red}55`, borderRadius: 8, padding: 18, marginBottom: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: C.red, marginBottom: 6 }}>
           🔧 重置為內建預設資料（{USER_DEFAULT_DATA.sessions.length}場 + {USER_DEFAULT_DATA.members.length}成員）
@@ -2750,8 +2827,10 @@ function TabBackup({ data, setData }) {
           showMsg("✅ 已重置為內建資料");
         }}>🔧 用內建資料覆蓋</Btn>
       </div>
+      )}
 
       {/* 從 JSON 還原 */}
+      {!readOnly && (
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18, marginBottom: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: C.goldLight, marginBottom: 6 }}>
           🔄 從 JSON 還原
@@ -2764,6 +2843,7 @@ function TabBackup({ data, setData }) {
             outline: "none", resize: "vertical", boxSizing: "border-box", marginBottom: 10 }} />
         <Btn onClick={importFromText}>⬆️ 匯入</Btn>
       </div>
+      )}
 
       {/* 雲端備份（折疊） */}
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 18 }}>
@@ -2782,8 +2862,8 @@ function TabBackup({ data, setData }) {
                 value={note} onChange={e => setNote(e.target.value)}
                 style={{ flex: 1, minWidth: 120, background: C.surface2, border: `1px solid ${C.border}`, color: C.text,
                   padding: "7px 10px", borderRadius: 4, fontSize: 13, outline: "none" }} />
-              <Btn onClick={createCloudBackup} disabled={cloudBusy}>📸 雲端備份</Btn>
-              {cloudBackups.length > 0 && (
+              {!readOnly && <Btn onClick={createCloudBackup} disabled={cloudBusy}>📸 雲端備份</Btn>}
+              {cloudBackups.length > 0 && !readOnly && (
                 <button onClick={clearAllCloud} style={{ background: "transparent", border: `1px solid ${C.red}55`,
                   color: C.red, padding: "0 12px", borderRadius: 4, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>
                   🗑 清空
@@ -2801,15 +2881,155 @@ function TabBackup({ data, setData }) {
                       {b.sessionCount}場 · {b.memberCount}成員{b.sizeKB ? ` · ${b.sizeKB}KB` : ""}{b.note && ` · ${b.note}`}
                     </div>
                   </div>
-                  <Btn variant="secondary" onClick={() => restoreCloud(b)} style={{ fontSize: 10, padding: "4px 10px" }}>🔄 還原</Btn>
-                  <button onClick={() => deleteCloud(b.id)}
+                  {!readOnly && <Btn variant="secondary" onClick={() => restoreCloud(b)} style={{ fontSize: 10, padding: "4px 10px" }}>🔄 還原</Btn>}
+                  {!readOnly && <button onClick={() => deleteCloud(b.id)}
                     style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted,
-                      padding: "4px 8px", borderRadius: 4, cursor: "pointer", fontSize: 10 }}>🗑</button>
+                      padding: "4px 8px", borderRadius: 4, cursor: "pointer", fontSize: 10 }}>🗑</button>}
                 </div>
               ))
             }
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// TAB: 個人紀錄
+// ═══════════════════════════════════════════════════════
+const venueLabel = (s) => {
+  if (s.venueId === "隱家場地") return "隱家";
+  if (s.venueId === "場地") return "官邸";
+  return (s.venueFee || 0) <= 10000 ? "隱家" : "官邸";   // 舊資料沒有 venueId，用金額推
+};
+const quarterOf = (date) => {
+  const [y, m] = (date || "").split("-");
+  return y ? `${y}Q${Math.floor((parseInt(m, 10) - 1) / 3) + 1}` : "?";
+};
+const shortDate = (date) => {
+  const p = (date || "").split("-");
+  return p.length === 3 ? `${parseInt(p[1], 10)}/${parseInt(p[2], 10)}` : date;
+};
+
+function TabMine({ data }) {
+  const { sessions, members = [] } = data;
+
+  // 出場過的人（照出席次數排）
+  const roster = useMemo(() => {
+    const cnt = {};
+    sessions.forEach(s => s.players.forEach(p => {
+      if (p.type === "dealer") return;
+      cnt[p.name] = (cnt[p.name] || 0) + 1;
+    }));
+    return Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]);
+  }, [sessions]);
+
+  const [who, setWho] = useState(() => {
+    const me = typeof window !== "undefined" ? window.__currentUser : null;
+    return me && roster.indexOf(me) !== -1 ? me : (roster[0] || "");
+  });
+
+  const rows = useMemo(() => {
+    const out = [];
+    sessions.forEach(s => {
+      const me = s.players.find(p => p.name === who && p.type !== "dealer");
+      if (!me) return;
+      const d = s.players.find(p => p.type === "dealer");
+      out.push({
+        id: s.id, date: s.date, q: quarterOf(s.date),
+        venue: venueLabel(s), dealer: d ? d.name : "—",
+        amount: me.amount, hours: s.hours,
+      });
+    });
+    return out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  }, [sessions, who]);
+
+  const total = rows.reduce((a, r) => a + r.amount, 0);
+  const wins = rows.filter(r => r.amount > 0).length;
+  const byQ = useMemo(() => {
+    const m = {};
+    rows.forEach(r => {
+      if (!m[r.q]) m[r.q] = { n: 0, sum: 0 };
+      m[r.q].n++; m[r.q].sum += r.amount;
+    });
+    return Object.keys(m).sort().reverse().map(k => ({ q: k, ...m[k] }));
+  }, [rows]);
+
+  const box = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8 };
+
+  if (roster.length === 0) return <div style={{ color: C.dim, fontSize: 13 }}>還沒有場次紀錄</div>;
+
+  return (
+    <div>
+      {/* 選人 */}
+      <div style={{ ...box, padding: "12px 14px", marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: C.dim, letterSpacing: "0.1em", marginBottom: 9 }}>看誰的紀錄</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {roster.map(n => (
+            <button key={n} onClick={() => setWho(n)}
+              style={{ background: who === n ? C.gold : "transparent",
+                border: `1px solid ${who === n ? C.gold : C.border}`,
+                color: who === n ? "#0a0c10" : C.dim,
+                fontWeight: who === n ? 700 : 400,
+                padding: "5px 12px", borderRadius: 4, cursor: "pointer",
+                fontFamily: "inherit", fontSize: 13 }}>
+              {n}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 總計 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10, marginBottom: 14 }}>
+        <div style={{ ...box, padding: "14px 16px" }}>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.12em" }}>累計輸贏</div>
+          <div style={{ fontFamily: "monospace", fontSize: 24, fontWeight: 700, marginTop: 2,
+            color: total >= 0 ? C.green : C.red }}>{fmt(total)}</div>
+        </div>
+        <div style={{ ...box, padding: "14px 16px" }}>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.12em" }}>出席</div>
+          <div style={{ fontFamily: "monospace", fontSize: 24, fontWeight: 700, marginTop: 2, color: C.goldLight }}>{rows.length} 場</div>
+        </div>
+        <div style={{ ...box, padding: "14px 16px" }}>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.12em" }}>贏的場次</div>
+          <div style={{ fontFamily: "monospace", fontSize: 24, fontWeight: 700, marginTop: 2, color: C.blue }}>
+            {wins}<span style={{ fontSize: 13, color: C.dim }}> / {rows.length}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 分季 */}
+      {byQ.length > 0 && (
+        <div style={{ ...box, padding: "6px 14px", marginBottom: 18 }}>
+          {byQ.map((r, i) => (
+            <div key={r.q} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "9px 0", borderBottom: i < byQ.length - 1 ? `1px solid ${C.border}` : "none" }}>
+              <span style={{ fontSize: 13, fontFamily: "monospace", color: C.dim }}>{r.q}</span>
+              <span style={{ display: "flex", gap: 16, alignItems: "baseline" }}>
+                <span style={{ fontSize: 12, color: C.dim }}>出席 <b style={{ color: C.text }}>{r.n}</b> 場</span>
+                <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 700,
+                  color: r.sum >= 0 ? C.green : C.red, minWidth: 82, textAlign: "right" }}>{fmt(r.sum)}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 逐場 */}
+      <SectionHeader>{who} 的每一場</SectionHeader>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {rows.map(r => (
+          <div key={r.id} style={{ ...box, padding: "10px 13px", display: "flex",
+            alignItems: "center", gap: 10, borderLeft: `3px solid ${r.amount >= 0 ? C.green : C.red}` }}>
+            <span style={{ fontFamily: "monospace", fontSize: 13, color: C.goldLight, minWidth: 46 }}>{shortDate(r.date)}</span>
+            <span style={{ fontSize: 12, color: C.dim, flex: 1, minWidth: 0 }}>
+              {r.venue}<span style={{ color: C.muted }}> / </span>{r.dealer}
+            </span>
+            <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700,
+              color: r.amount >= 0 ? C.green : C.red }}>{fmt(r.amount)}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -3281,6 +3501,7 @@ const TABS = [
   { id: "records",  label: "📋 場次" },
   { id: "settle",   label: "📝 帳款結算" },
   { id: "cumul",    label: "🗡️ 戰鬥紀錄" },
+  { id: "mine",     label: "👤 個人紀錄" },
   { id: "reserve",  label: "🏦 公積金" },
   { id: "bonus",    label: "🃏 特殊牌" },
   { id: "members",  label: "👥 成員" },
@@ -3289,7 +3510,10 @@ const TABS = [
 
 function PokerApp() {
   const isReadonly = typeof window !== "undefined" && window.__readonly === true;
-  const visibleTabs = isReadonly ? TABS.filter(t => t.id === "cumul") : TABS;
+  const READONLY_TABS = ["cumul", "mine"];
+  const visibleTabs = isReadonly ? TABS.filter(t => READONLY_TABS.indexOf(t.id) !== -1) : TABS;
+  // 「新增／場次」人人可編輯；其他頁面預設只有管理者能改，管理者可一鍵開放
+  const owner = isOwner();
   const [tab, setTab] = useState(isReadonly ? "cumul" : "new");
   const [data, setDataState] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -3371,6 +3595,12 @@ function PokerApp() {
     </div>
   );
 
+  const allowAllEdit = !!(data.settings && data.settings.allowAllEdit);
+  const canEditAll = owner || allowAllEdit;
+  const toggleAllowAll = () => setData(d => ({
+    ...d, settings: { ...(d.settings || {}), allowAllEdit: !(d.settings && d.settings.allowAllEdit) }
+  }));
+
   return (
     <div style={{ background: C.bg, minHeight: "100vh", color: C.text, fontFamily: "'Noto Serif TC', serif" }}>
       {/* Header */}
@@ -3407,6 +3637,17 @@ function PokerApp() {
               {t.label}
             </button>
           ))}
+          {owner && (
+            <button onClick={toggleAllowAll}
+              title={allowAllEdit ? "點一下改回只有自己能編輯" : "點一下開放大家編輯"}
+              style={{ background: allowAllEdit ? C.green + "1e" : "transparent",
+                border: `1px solid ${allowAllEdit ? C.green : C.border}`,
+                color: allowAllEdit ? C.green : C.dim,
+                padding: "5px 11px", borderRadius: 4, cursor: "pointer",
+                fontFamily: "inherit", fontSize: 12, transition: "all .15s" }}>
+              {allowAllEdit ? "👥 大家可編輯" : "🔐 只有我可編輯"}
+            </button>
+          )}
           <button onClick={() => { try { _privShowGate("app"); } catch (e) {} }}
             title="私人帳本（需要自己的密碼）"
             style={{ background: "transparent", border: `1px dashed ${C.border}`,
@@ -3446,17 +3687,18 @@ function PokerApp() {
           <SectionHeader>{TABS.find(t => t.id === tab)?.label || ""}</SectionHeader>
         </div>
         {isReadonly ? (
-          <TabCumul data={data} />
+          tab === "mine" ? <TabMine data={data} /> : <TabCumul data={data} />
         ) : (
           <>
+            {tab === "mine"     && <TabMine     data={data} />}
             {tab === "records"  && <TabRecords  data={data} setData={setData} onEdit={handleEdit} />}
             {tab === "new"      && <TabNew      data={data} setData={setData} editingId={editingId} clearEditing={() => setEditingId(null)} />}
-            {tab === "settle"   && <TabSettle   data={data} setData={setData} />}
+            {tab === "settle"   && <TabSettle   data={data} setData={setData} readOnly={!canEditAll} />}
             {tab === "cumul"    && <TabCumul    data={data} />}
-            {tab === "reserve"  && <TabReserve  data={data} setData={setData} />}
+            {tab === "reserve"  && <TabReserve  data={data} setData={setData} readOnly={!canEditAll} />}
             {tab === "bonus"    && <TabBonus    data={data} />}
-            {tab === "members"  && <TabMembers  data={data} setData={setData} />}
-            {tab === "backup"   && <TabBackup   data={data} setData={setData} />}
+            {tab === "members"  && <TabMembers  data={data} setData={setData} readOnly={!canEditAll} />}
+            {tab === "backup"   && <TabBackup   data={data} setData={setData} readOnly={!canEditAll} />}
           </>
         )}
       </div>
